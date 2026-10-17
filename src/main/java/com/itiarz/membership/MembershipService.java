@@ -11,6 +11,7 @@ import java.util.function.Function;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -49,6 +50,7 @@ import com.itiarz.tenant.TenantRepository;
 public class MembershipService {
     private static final int EMAIL_MAX = 320;
     private static final Pattern EMAIL = Pattern.compile("^[^@\\s]+@[^@\\s]+$");
+    private static final String UNIQUE_TENANT_EMAIL = "uq_memberships_tenant_email";
 
     private final MembershipRepository memberships;
     private final AppUserRepository users;
@@ -102,7 +104,15 @@ public class MembershipService {
                     return existing;
                 })
                 .orElseGet(() -> memberships.save(Membership.invitation(tenantId, normalized, role, invitedBy)));
-        memberships.flush();
+        try {
+            memberships.flush();
+        } catch (DataIntegrityViolationException e) {
+            // a concurrent invitation of the same e-mail committed between our check and insert
+            if (String.valueOf(e.getMostSpecificCause().getMessage()).contains(UNIQUE_TENANT_EMAIL)) {
+                throw duplicateInvite();
+            }
+            throw e;
+        }
         auditFor(tenantId, AuditActions.MEMBER_INVITED, membership.getId(),
                 details("email", normalized, "role", role.name()));
         return membership;
@@ -128,12 +138,13 @@ public class MembershipService {
     @Transactional
     public MemberView changeRole(UUID membershipId, TenantRole role) {
         RequestContext context = RequestContextHolder.get();
-        Membership membership = findLive(membershipId, context.tenantId());
+        Locked locked = lockForMutation(membershipId, context.tenantId());
+        Membership membership = locked.target();
         if (membership.getRole() == role) {
             return view(membership);
         }
         if (membership.getRole() == TenantRole.TENANT_ADMIN) {
-            requireAnotherActiveAdmin(membership);
+            requireAnotherActiveAdmin(locked);
         }
         if (context.userId().equals(membership.getUserId())) {
             throw new DomainException(HttpStatus.CONFLICT, ErrorCode.CONFLICT,
@@ -155,9 +166,10 @@ public class MembershipService {
     @Transactional
     public void remove(UUID membershipId) {
         RequestContext context = RequestContextHolder.get();
-        Membership membership = findLive(membershipId, context.tenantId());
+        Locked locked = lockForMutation(membershipId, context.tenantId());
+        Membership membership = locked.target();
         if (membership.getRole() == TenantRole.TENANT_ADMIN) {
-            requireAnotherActiveAdmin(membership);
+            requireAnotherActiveAdmin(locked);
         }
         membership.remove();
         memberships.flush();
@@ -196,21 +208,31 @@ public class MembershipService {
         return normalized;
     }
 
-    private Membership findLive(UUID membershipId, UUID tenantId) {
-        // findById alone is not enough: the self-read policy exposes the caller's rows in other tenants
-        return memberships.findById(membershipId)
+    /** The mutation target plus the tenant's active admins, all locked by {@link #lockForMutation}. */
+    private record Locked(Membership target, List<Membership> activeAdmins) { }
+
+    /**
+     * Locks what a role change or removal depends on, always in the same order: first the tenant's
+     * active TENANT_ADMIN rows (id order), then the target row (SELECT ... FOR UPDATE). The target is
+     * therefore read in its latest committed state and cannot be changed concurrently, so a stale read
+     * can never write an old status back (e.g. resurrect a removed member). Locking the admin set first
+     * serializes mutations per tenant and avoids the deadlock that "target first, then admins" would
+     * allow between two admins removing each other. Removed or foreign ids are 404 (the explicit tenant
+     * check matters: the self-read policy exposes the caller's rows in other tenants).
+     */
+    private Locked lockForMutation(UUID membershipId, UUID tenantId) {
+        List<Membership> admins = memberships.lockActiveByRole(tenantId, TenantRole.TENANT_ADMIN);
+        Membership target = memberships.lockById(membershipId)
                 .filter(m -> m.getTenantId().equals(tenantId) && m.getStatus() != MembershipStatus.REMOVED)
                 .orElseThrow(() -> new DomainException(HttpStatus.NOT_FOUND, ErrorCode.NOT_FOUND,
                         "Üye bulunamadı. Listeyi yenileyip tekrar deneyin."));
+        return new Locked(target, admins);
     }
 
-    /**
-     * 409 LAST_ADMIN when {@code target} is an active TENANT_ADMIN and no other active one remains.
-     * The admin rows are locked (FOR UPDATE) so concurrent demotions/removals cannot both pass.
-     */
-    private void requireAnotherActiveAdmin(Membership target) {
-        List<Membership> admins = memberships.lockActiveByRole(target.getTenantId(), TenantRole.TENANT_ADMIN);
-        boolean another = admins.stream().anyMatch(m -> !m.getId().equals(target.getId()));
+    /** 409 LAST_ADMIN when the (locked) target is an active TENANT_ADMIN and no other active one remains. */
+    private static void requireAnotherActiveAdmin(Locked locked) {
+        Membership target = locked.target();
+        boolean another = locked.activeAdmins().stream().anyMatch(m -> !m.getId().equals(target.getId()));
         if (!another && target.getStatus() == MembershipStatus.ACTIVE) {
             throw new DomainException(HttpStatus.CONFLICT, ErrorCode.LAST_ADMIN,
                     "Şirketin son yöneticisi çıkarılamaz veya rolü düşürülemez. Önce başka bir üyeyi yönetici yapın.");

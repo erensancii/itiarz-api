@@ -41,6 +41,18 @@ class JwtClaimsTest {
     }
 
     @Test
+    void emailWithCapitalIIsNormalisedLocaleIndependently() {
+        java.util.Locale previous = java.util.Locale.getDefault();
+        java.util.Locale.setDefault(java.util.Locale.forLanguageTag("tr-TR"));
+        try {
+            assertThat(JwtClaims.from(token(Map.of("email", "IPEK@ACME.LOCAL"))).email())
+                    .isEqualTo("ipek@acme.local");
+        } finally {
+            java.util.Locale.setDefault(previous);
+        }
+    }
+
+    @Test
     void emailIsNormalisedAndPlatformAdminRead() {
         JwtClaims claims = JwtClaims.from(token(Map.of(
                 "email", "Ayse.YILMAZ@Example.COM",

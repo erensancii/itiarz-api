@@ -33,12 +33,27 @@ public interface MembershipRepository extends JpaRepository<Membership, UUID> {
             """)
     boolean existsLiveMemberWithUserEmail(@Param("tenantId") UUID tenantId, @Param("email") String email);
 
+    /** The rows of a tenant linked to a user, any status (at most one by uq_memberships_tenant_user). */
+    List<Membership> findByTenantIdAndUserId(UUID tenantId, UUID userId);
+
+    /** {@link #findByTenantIdAndInvitedEmail} with SELECT ... FOR UPDATE (invitation activation). */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select m from Membership m where m.tenantId = :tenantId and m.invitedEmail = :email")
+    Optional<Membership> lockByTenantIdAndInvitedEmail(@Param("tenantId") UUID tenantId,
+                                                       @Param("email") String email);
+
+    /** Loads one row with SELECT ... FOR UPDATE: mutations read the committed state and hold it. */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select m from Membership m where m.id = :id")
+    Optional<Membership> lockById(@Param("id") UUID id);
+
     /**
-     * Locks the tenant's active rows with {@code role} (FOR UPDATE), so concurrent demotions/removals of
-     * admins serialize and the last-admin check cannot be raced.
+     * Locks the tenant's active rows with {@code role} (FOR UPDATE, in id order so concurrent callers
+     * never deadlock), so concurrent demotions/removals of admins serialize and the last-admin check
+     * cannot be raced.
      */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select m from Membership m where m.tenantId = :tenantId and m.role = :role "
-            + "and m.status = com.itiarz.membership.MembershipStatus.ACTIVE")
+            + "and m.status = com.itiarz.membership.MembershipStatus.ACTIVE order by m.id")
     List<Membership> lockActiveByRole(@Param("tenantId") UUID tenantId, @Param("role") TenantRole role);
 }

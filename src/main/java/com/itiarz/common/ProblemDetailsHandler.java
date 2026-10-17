@@ -1,9 +1,11 @@
 package com.itiarz.common;
 
 import java.io.IOException;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -24,7 +26,9 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
+import com.fasterxml.jackson.databind.JsonMappingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.exc.MismatchedInputException;
 import com.itiarz.keycloak.KeycloakRequestException;
 import com.itiarz.keycloak.KeycloakUnavailableException;
 
@@ -81,8 +85,39 @@ public class ProblemDetailsHandler {
 
     @ExceptionHandler(HttpMessageNotReadableException.class)
     ResponseEntity<ProblemDetail> unreadable(HttpMessageNotReadableException ex, HttpServletRequest request) {
-        return respond(problem(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION,
-                "İstek gövdesi okunamadı. JSON, enum ve UTC tarih biçimlerini kontrol edin.", request));
+        ProblemDetail problem = problem(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION,
+                "İstek gövdesi okunamadı. JSON, enum ve UTC tarih biçimlerini kontrol edin.", request);
+        // a value of the wrong type/format (e.g. an unknown enum constant) names its field (spec §8)
+        if (ex.getCause() instanceof MismatchedInputException mismatch && !mismatch.getPath().isEmpty()) {
+            problem.setProperty("errors", List.of(Map.of("field", fieldPath(mismatch.getPath()),
+                    "message", mismatchMessage(mismatch.getTargetType()))));
+        }
+        return respond(problem);
+    }
+
+    /** {@code items[0].role} style path from Jackson's reference chain. */
+    private static String fieldPath(List<JsonMappingException.Reference> path) {
+        StringBuilder field = new StringBuilder();
+        for (JsonMappingException.Reference ref : path) {
+            if (ref.getFieldName() != null) {
+                if (!field.isEmpty()) {
+                    field.append('.');
+                }
+                field.append(ref.getFieldName());
+            } else if (ref.getIndex() >= 0) {
+                field.append('[').append(ref.getIndex()).append(']');
+            }
+        }
+        return field.toString();
+    }
+
+    private static String mismatchMessage(Class<?> targetType) {
+        if (targetType != null && targetType.isEnum()) {
+            String allowed = Arrays.stream(targetType.getEnumConstants()).map(String::valueOf)
+                    .collect(Collectors.joining(", "));
+            return "Geçersiz değer. Geçerli değerler: " + allowed + ".";
+        }
+        return "Geçersiz değer veya biçim.";
     }
 
     @ExceptionHandler(ObjectOptimisticLockingFailureException.class)

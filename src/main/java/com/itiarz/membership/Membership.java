@@ -88,6 +88,12 @@ public class Membership {
         touch();
     }
 
+    /** Releases the user link of a non-active row, so the user can be bound to another row of the tenant. */
+    void unlinkUser() {
+        this.userId = null;
+        touch();
+    }
+
     void changeRole(TenantRole role) {
         this.role = role;
         touch();

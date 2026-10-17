@@ -8,6 +8,8 @@ import java.sql.ResultSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -89,6 +91,10 @@ class MembershipIT extends IntegrationTest {
             ResponseEntity<String> capitalI = invite(adminToken, "IPEK-" + suffix + "@ACME.LOCAL", "VIEWER");
             assertThat(capitalI.getStatusCode()).as(capitalI.getBody()).isEqualTo(HttpStatus.CREATED);
             assertThat(json(capitalI).path("email").asText()).isEqualTo("ipek-" + suffix + "@acme.local");
+            // ... and the token e-mail is normalized the same way, so the invitation activates
+            String ipek = TestTokens.jwt("kc-ipek-" + suffix, "IPEK-" + suffix + "@ACME.LOCAL", List.of(slug), false);
+            assertThat(ok(get("/api/me", ipek)).path("activeTenant").path("role").asText()).isEqualTo("VIEWER");
+            assertThat(membershipStatus("ipek-" + suffix + "@acme.local")).isEqualTo("ACTIVE");
         } finally {
             Locale.setDefault(previous);
         }
@@ -254,7 +260,128 @@ class MembershipIT extends IntegrationTest {
         assertProblem(delete("/api/members/" + foreign, adminToken), HttpStatus.NOT_FOUND, "NOT_FOUND");
     }
 
+    @Test
+    void invalidRoleValueIs422WithRoleField() {
+        ResponseEntity<String> response = postJson("/api/members/invitations", adminToken,
+                "{\"email\":\"x@example.com\",\"role\":\"BOSS\"}");
+
+        assertProblem(response, HttpStatus.UNPROCESSABLE_ENTITY, "VALIDATION");
+        JsonNode errors = json(response).path("errors");
+        assertThat(errors.findValuesAsText("field")).containsExactly("role");
+        assertThat(errors.get(0).path("message").asText()).isNotBlank();
+    }
+
+    /**
+     * Regression: a role change that read the member before a concurrent removal committed must not
+     * write the old ACTIVE status back. The removal is simulated by a JDBC transaction that holds the
+     * row lock; the PATCH has to wait for it and then see REMOVED (404).
+     */
+    @Test
+    void roleChangeDoesNotResurrectConcurrentlyRemovedMember() throws Exception {
+        String email = unique("analyst") + "@example.com";
+        UUID membershipId = seedMember(slug, email, "ANALYST", "ACTIVE");
+
+        ResponseEntity<String> response;
+        try (Connection removal = tenantTransaction()) {
+            try (PreparedStatement ps = removal.prepareStatement(
+                    "UPDATE memberships SET status = 'REMOVED' WHERE id = ?")) {
+                ps.setObject(1, membershipId);
+                assertThat(ps.executeUpdate()).isEqualTo(1);
+            }
+            CompletableFuture<ResponseEntity<String>> patch = CompletableFuture.supplyAsync(() ->
+                    patchJson("/api/members/" + membershipId, adminToken, "{\"role\":\"APPROVER\"}"));
+            awaitLockWaiter(patch);
+            removal.commit();
+            response = patch.get(30, TimeUnit.SECONDS);
+        }
+
+        assertProblem(response, HttpStatus.NOT_FOUND, "NOT_FOUND");
+        assertThat(membershipStatus(email)).isEqualTo("REMOVED");
+    }
+
+    /** Regression: two invitations of one e-mail racing on the unique key end in 409 DUPLICATE_INVITE. */
+    @Test
+    void concurrentDuplicateInviteIs409DuplicateInvite() throws Exception {
+        String email = unique("analyst") + "@example.com";
+
+        ResponseEntity<String> response;
+        try (Connection other = tenantTransaction()) {
+            try (PreparedStatement ps = other.prepareStatement(
+                    "INSERT INTO memberships (id, tenant_id, invited_email, role, status) "
+                            + "VALUES (?, ?, ?, 'VIEWER', 'INVITED')")) {
+                ps.setObject(1, UUID.randomUUID());
+                ps.setObject(2, tenantId);
+                ps.setString(3, email);
+                ps.executeUpdate();
+            }
+            CompletableFuture<ResponseEntity<String>> invite =
+                    CompletableFuture.supplyAsync(() -> invite(adminToken, email, "ANALYST"));
+            awaitLockWaiter(invite);
+            other.commit();
+            response = invite.get(30, TimeUnit.SECONDS);
+        }
+
+        assertProblem(response, HttpStatus.CONFLICT, "DUPLICATE_INVITE");
+        assertThat(fakeKeycloak.invitations()).isEmpty();
+    }
+
+    /**
+     * Regression: a user removed under an old e-mail who changed it and is invited under the new one
+     * must be activated (the old row's user link is released), not locked out with a unique violation.
+     */
+    @Test
+    void invitationUnderChangedEmailActivatesUserWithOldRemovedRow() {
+        String oldEmail = unique("old") + "@example.com";
+        UUID oldRow = seedMember(slug, oldEmail, "ANALYST", "REMOVED");
+        String newEmail = unique("new") + "@example.com";
+        assertThat(invite(adminToken, newEmail, "APPROVER").getStatusCode()).isEqualTo(HttpStatus.CREATED);
+
+        // same Keycloak user (subject) as the removed row, now with the new e-mail
+        String token = TestTokens.jwt(subOf(oldEmail), newEmail, List.of(slug), false);
+        JsonNode me = ok(get("/api/me", token));
+
+        assertThat(me.path("activeTenant").path("role").asText()).isEqualTo("APPROVER");
+        assertThat(membershipStatus(newEmail)).isEqualTo("ACTIVE");
+        assertThat(queryInTenant("SELECT user_id::text FROM memberships WHERE id = ?::uuid", oldRow.toString()))
+                .isNull();
+        assertThat(membershipStatus(oldEmail)).isEqualTo("REMOVED");
+    }
+
     // --- helpers -------------------------------------------------------------------------------
+
+    /** An open app-role transaction inside this test's tenant; the caller commits or closes (rollback). */
+    private Connection tenantTransaction() throws Exception {
+        Connection c = PostgresSupport.appConnection();
+        c.setAutoCommit(false);
+        try (PreparedStatement set = c.prepareStatement("SELECT set_config('app.tenant_id', ?, true)")) {
+            set.setString(1, tenantId.toString());
+            set.execute();
+        }
+        return c;
+    }
+
+    /** Waits until some app-role session is blocked on a lock (the request under test). */
+    private static void awaitLockWaiter(CompletableFuture<?> request) throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15);
+        try (Connection c = PostgresSupport.appConnection();
+             PreparedStatement ps = c.prepareStatement(
+                     "SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND usename = ?")) {
+            ps.setString(1, PostgresSupport.APP_USER);
+            while (System.nanoTime() < deadline) {
+                if (request.isDone()) {
+                    return; // finished without blocking: the assertions will tell what happened
+                }
+                try (ResultSet rs = ps.executeQuery()) {
+                    rs.next();
+                    if (rs.getLong(1) > 0) {
+                        return;
+                    }
+                }
+                Thread.sleep(50);
+            }
+        }
+        throw new AssertionError("request never blocked on the row lock");
+    }
 
     private String token(String email) {
         return TestTokens.jwt(subOf(email), email, List.of(slug), false);

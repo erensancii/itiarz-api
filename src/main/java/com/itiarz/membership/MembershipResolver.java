@@ -38,9 +38,16 @@ public class MembershipResolver {
         if (active.isPresent() || !emailVerified || normalizedEmail == null || normalizedEmail.isBlank()) {
             return active;
         }
-        return memberships.findByTenantIdAndInvitedEmail(tenantId, normalizedEmail)
+        // locked: concurrent first requests of one user activate (and audit) once
+        return memberships.lockByTenantIdAndInvitedEmail(tenantId, normalizedEmail)
                 .filter(m -> m.getStatus() == MembershipStatus.INVITED)
                 .map(invitation -> {
+                    // The user may still be linked to an older non-active row of this tenant (e.g. removed
+                    // under a previous e-mail); release it, or binding would violate uq_memberships_tenant_user.
+                    memberships.findByTenantIdAndUserId(tenantId, user.getId()).stream()
+                            .filter(other -> !other.getId().equals(invitation.getId()))
+                            .forEach(Membership::unlinkUser);
+                    memberships.flush();
                     invitation.activate(user.getId());
                     memberships.flush();
                     audit.record(AuditActions.MEMBER_ACTIVATED, "membership", invitation.getId().toString(),
