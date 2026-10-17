@@ -55,7 +55,7 @@ public class HttpKeycloakGateway implements KeycloakGateway {
     public String createOrganization(String name, String alias) {
         Map<String, Object> body = Map.of("name", name, "alias", alias, "enabled", true);
         ResponseEntity<Void> response = call(() -> client.post().uri(base + "/organizations")
-                .contentType(MediaType.APPLICATION_JSON).body(body).retrieve().toBodilessEntity(), false);
+                .contentType(MediaType.APPLICATION_JSON).body(body).retrieve().toBodilessEntity(), "createOrganization", false);
         URI location = response.getHeaders().getLocation();
         if (location == null) {
             throw new KeycloakUnavailableException("Keycloak did not return an organization location", null);
@@ -66,7 +66,7 @@ public class HttpKeycloakGateway implements KeycloakGateway {
 
     @Override
     public void deleteOrganization(String orgId) {
-        call(() -> client.delete().uri(base + "/organizations/{id}", orgId).retrieve().toBodilessEntity(), true);
+        call(() -> client.delete().uri(base + "/organizations/{id}", orgId).retrieve().toBodilessEntity(), "deleteOrganization", true);
     }
 
     @Override
@@ -77,7 +77,7 @@ public class HttpKeycloakGateway implements KeycloakGateway {
             int offset = first;
             List<Map<String, Object>> page = call(() -> client.get()
                     .uri(base + "/organizations?first={f}&max={m}", offset, ORG_PAGE)
-                    .retrieve().body(LIST_OF_MAPS), false);
+                    .retrieve().body(LIST_OF_MAPS), "findOrganizationIdByAlias", false);
             if (page == null || page.isEmpty()) {
                 return Optional.empty();
             }
@@ -93,7 +93,7 @@ public class HttpKeycloakGateway implements KeycloakGateway {
         MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
         form.add("email", email.toLowerCase(Locale.ROOT));
         call(() -> client.post().uri(base + "/organizations/{id}/members/invite-user", orgId)
-                .contentType(MediaType.APPLICATION_FORM_URLENCODED).body(form).retrieve().toBodilessEntity(), false);
+                .contentType(MediaType.APPLICATION_FORM_URLENCODED).body(form).retrieve().toBodilessEntity(), "inviteToOrganization", false);
     }
 
     @Override
@@ -101,13 +101,13 @@ public class HttpKeycloakGateway implements KeycloakGateway {
         // the body is a bare JSON string: the user id
         call(() -> client.post().uri(base + "/organizations/{id}/members", orgId)
                 .contentType(MediaType.APPLICATION_JSON).body("\"" + keycloakUserId + "\"")
-                .retrieve().toBodilessEntity(), false);
+                .retrieve().toBodilessEntity(), "addOrganizationMember", false);
     }
 
     @Override
     public void removeOrganizationMember(String orgId, String keycloakUserId) {
         call(() -> client.delete().uri(base + "/organizations/{id}/members/{uid}", orgId, keycloakUserId)
-                .retrieve().toBodilessEntity(), true);
+                .retrieve().toBodilessEntity(), "removeOrganizationMember", true);
     }
 
     @Override
@@ -115,7 +115,7 @@ public class HttpKeycloakGateway implements KeycloakGateway {
         String wanted = email.toLowerCase(Locale.ROOT);
         List<Map<String, Object>> users = call(() -> client.get()
                 .uri(base + "/users?email={e}&exact=true", wanted)
-                .retrieve().body(LIST_OF_MAPS), false);
+                .retrieve().body(LIST_OF_MAPS), "findUserIdByEmail", false);
         return firstMatching(users, "email", wanted);
     }
 
@@ -130,7 +130,7 @@ public class HttpKeycloakGateway implements KeycloakGateway {
     }
 
     /** @param tolerateNotFound a 404 means "already gone" (null result) instead of a failure */
-    private <T> T call(Supplier<T> action, boolean tolerateNotFound) {
+    private <T> T call(Supplier<T> action, String operation, boolean tolerateNotFound) {
         try {
             return action.get();
         } catch (RestClientResponseException ex) {
@@ -142,13 +142,19 @@ public class HttpKeycloakGateway implements KeycloakGateway {
             if (status == HttpStatus.NOT_FOUND && tolerateNotFound) {
                 return null;
             }
-            log.error("Keycloak admin call failed: {} {}", ex.getStatusCode(), ex.getResponseBodyAsString());
-            throw new KeycloakUnavailableException("Keycloak admin API returned " + ex.getStatusCode(), ex);
-        } catch (DomainException ex) {
+            // operation + status only: response bodies may contain personal data
+            int code = ex.getStatusCode().value();
+            log.error("Keycloak admin call {} failed with HTTP {}", operation, code);
+            if (code >= 400 && code < 500 && code != 401 && code != 403) {
+                throw new KeycloakRequestException("Keycloak rejected " + operation + " with HTTP " + code, ex);
+            }
+            // 401/403 = admin credential or role misconfiguration; 5xx = Keycloak failing
+            throw new KeycloakUnavailableException("Keycloak admin API returned " + code + " for " + operation, ex);
+        } catch (DomainException | KeycloakRequestException ex) {
             throw ex;
         } catch (RuntimeException ex) {
             // connection/timeouts (ResourceAccessException) and token-fetch failures
-            log.error("Keycloak admin call failed", ex);
+            log.error("Keycloak admin call {} failed", operation, ex);
             throw new KeycloakUnavailableException("Keycloak is unreachable or rejected admin credentials", ex);
         }
     }

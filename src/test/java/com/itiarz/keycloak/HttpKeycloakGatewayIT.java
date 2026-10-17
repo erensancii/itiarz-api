@@ -6,12 +6,16 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.Map;
 import java.util.UUID;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.web.client.RestClient;
+import com.fasterxml.jackson.databind.JsonNode;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.Network;
 import org.testcontainers.containers.wait.strategy.Wait;
@@ -37,6 +41,7 @@ class HttpKeycloakGatewayIT {
     private static Network network;
     private static GenericContainer<?> mailpit;
     private static GenericContainer<?> keycloak;
+    private static String baseUrl;
     private static HttpKeycloakGateway gateway;
 
     @BeforeAll
@@ -57,7 +62,7 @@ class HttpKeycloakGatewayIT {
                 .withExposedPorts(8080, 9000)
                 .waitingFor(Wait.forHttp("/health/ready").forPort(9000).withStartupTimeout(Duration.ofMinutes(4)));
         keycloak.start();
-        String baseUrl = "http://" + keycloak.getHost() + ":" + keycloak.getMappedPort(8080);
+        baseUrl = "http://" + keycloak.getHost() + ":" + keycloak.getMappedPort(8080);
         KeycloakProperties props = new KeycloakProperties(baseUrl, "itiarz", "itiarz-api-admin", ADMIN_SECRET);
         gateway = new HttpKeycloakGateway(KeycloakConfig.adminRestClient(props), props.realm());
     }
@@ -152,6 +157,35 @@ class HttpKeycloakGatewayIT {
         String lower = gateway.findUserIdByEmail("analist@acme.local").orElseThrow();
         assertThat(gateway.findUserIdByEmail("Analist@ACME.local")).contains(lower);
         assertThat(gateway.findUserIdByEmail("nobody@acme.local")).isEmpty();
+    }
+
+    @Test
+    void addingMemberToUnknownOrganizationIsARequestError() {
+        String userId = gateway.findUserIdByEmail("analist@acme.local").orElseThrow();
+        assertThatThrownBy(() -> gateway.addOrganizationMember(UUID.randomUUID().toString(), userId))
+                .isInstanceOf(KeycloakRequestException.class);
+    }
+
+    @Test
+    void findUserIdByEmailEncodesPlusSign() {
+        String email = "ali+etiket-" + UUID.randomUUID().toString().substring(0, 8) + "@example.com";
+        String adminToken = RestClient.create(baseUrl).post()
+                .uri("/realms/itiarz/protocol/openid-connect/token")
+                .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                .body("grant_type=client_credentials&client_id=itiarz-api-admin&client_secret=" + ADMIN_SECRET)
+                .retrieve().body(JsonNode.class).get("access_token").asText();
+        RestClient.create(baseUrl).post().uri("/admin/realms/itiarz/users")
+                .header("Authorization", "Bearer " + adminToken).contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of("username", email, "email", email, "enabled", true))
+                .retrieve().toBodilessEntity();
+
+        assertThat(gateway.findUserIdByEmail(email)).isPresent();
+    }
+
+    @Test
+    void propertiesToStringRedactsSecret() {
+        assertThat(new KeycloakProperties("http://kc", "itiarz", "id", "s3cret").toString())
+                .doesNotContain("s3cret");
     }
 
     @Test

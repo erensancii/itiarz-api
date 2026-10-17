@@ -25,6 +25,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.itiarz.keycloak.KeycloakRequestException;
 import com.itiarz.keycloak.KeycloakUnavailableException;
 
 /**
@@ -51,6 +52,12 @@ public class ProblemDetailsHandler {
         log.error("Keycloak unavailable [traceId={}]", TraceIdFilter.traceId(request), ex);
         return respond(problem(HttpStatus.BAD_GATEWAY, ErrorCode.KEYCLOAK_UNAVAILABLE,
                 "Kimlik hizmetine şu an ulaşılamıyor. Lütfen biraz sonra tekrar deneyin.", request));
+    }
+
+    @ExceptionHandler(KeycloakRequestException.class)
+    ResponseEntity<ProblemDetail> keycloakRequest(KeycloakRequestException ex, HttpServletRequest request) {
+        log.error("Keycloak rejected a request [traceId={}]", TraceIdFilter.traceId(request), ex);
+        return respond(internal(request));
     }
 
     @ExceptionHandler(FieldValidationException.class)

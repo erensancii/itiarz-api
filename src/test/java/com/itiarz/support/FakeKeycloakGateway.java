@@ -16,6 +16,7 @@ import org.springframework.http.HttpStatus;
 import com.itiarz.common.DomainException;
 import com.itiarz.common.ErrorCode;
 import com.itiarz.keycloak.KeycloakGateway;
+import com.itiarz.keycloak.KeycloakRequestException;
 
 /**
  * In-memory Keycloak for integration tests. Organizations are unique by alias (409 CONFLICT otherwise),
@@ -101,6 +102,9 @@ public class FakeKeycloakGateway implements KeycloakGateway {
     public synchronized void addOrganizationMember(String orgId, String keycloakUserId) {
         maybeFail();
         requireOrg(orgId);
+        if (!usersByEmail.containsValue(keycloakUserId)) {
+            throw new KeycloakRequestException("Unknown user " + keycloakUserId, null);
+        }
         if (!members.get(orgId).add(keycloakUserId)) {
             throw new DomainException(HttpStatus.CONFLICT, ErrorCode.CONFLICT, "Already a member");
         }
@@ -123,7 +127,7 @@ public class FakeKeycloakGateway implements KeycloakGateway {
 
     private void requireOrg(String orgId) {
         if (!orgs.containsKey(orgId)) {
-            throw new IllegalStateException("Unknown organization " + orgId);
+            throw new KeycloakRequestException("Unknown organization " + orgId, null);
         }
     }
 

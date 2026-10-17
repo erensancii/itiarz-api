@@ -40,6 +40,15 @@ public abstract class IntegrationTest {
     @Autowired
     protected TestRestTemplate rest;
 
+    @Autowired
+    protected FakeKeycloakGateway fakeKeycloak;
+
+    /** The fake is a singleton in the cached context: clear state and pending failures between tests. */
+    @org.junit.jupiter.api.BeforeEach
+    void resetFakeKeycloak() {
+        fakeKeycloak.reset();
+    }
+
     @DynamicPropertySource
     static void database(DynamicPropertyRegistry registry) {
         registry.add("spring.datasource.url", () -> PostgresSupport.container().getJdbcUrl());
