@@ -212,6 +212,7 @@ class AuditIT extends IntegrationTest {
         ResponseEntity<String> response = get("/api/audit", TestTokens.jwt(subOf(email), email, null, true));
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(response.getHeaders().getContentType()).isNotNull();
         assertThat(response.getHeaders().getContentType().isCompatibleWith(
                 org.springframework.http.MediaType.APPLICATION_PROBLEM_JSON)).isTrue();
     }
@@ -232,10 +233,14 @@ class AuditIT extends IntegrationTest {
 
         try (Connection c = PostgresSupport.ownerConnection()) {
             setLocal(c, "app.tenant_id", tenant.toString());
-            try (PreparedStatement ps = c.prepareStatement("SELECT host(ip) FROM audit_events");
-                 ResultSet rs = ps.executeQuery()) {
-                assertThat(rs.next()).isTrue();
-                assertThat(rs.getString(1)).isNotNull().isNotEqualTo("203.0.113.9");
+            try (PreparedStatement ps = c.prepareStatement(
+                    "SELECT host(ip) FROM audit_events WHERE tenant_id = ? AND target_id = 'probe'")) {
+                ps.setObject(1, tenant);
+                try (ResultSet rs = ps.executeQuery()) {
+                    assertThat(rs.next()).isTrue();
+                    assertThat(rs.getString(1)).isNotNull().isNotEqualTo("203.0.113.9");
+                    assertThat(rs.next()).isFalse();
+                }
             }
         }
     }

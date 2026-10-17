@@ -69,8 +69,9 @@ public class AuditService {
 
     /**
      * Makes a remote address safe for {@code CAST(? AS inet)}: strips an IPv6 zone id
-     * ({@code fe80::1%eth0}) and returns null for anything that is not an IP literal, so an odd
-     * address can never roll back the business transaction.
+     * ({@code fe80::1%eth0}) and returns null for anything that is not a strictly valid IPv4/IPv6
+     * literal, so an odd address can never roll back the business transaction. Pure string
+     * validation; no resolver is ever called.
      */
     static String normalizeIp(String raw) {
         if (raw == null) {
@@ -78,18 +79,54 @@ public class AuditService {
         }
         int zone = raw.indexOf('%');
         String value = (zone >= 0 ? raw.substring(0, zone) : raw).trim();
-        boolean v4 = value.matches("\\d{1,3}(\\.\\d{1,3}){3}");
-        boolean v6 = value.indexOf(':') >= 0 && value.matches("[0-9a-fA-F:.]+");
-        if (!v4 && !v6) {
-            return null;
+        return isIpv4(value) || isIpv6(value) ? value : null;
+    }
+
+    private static boolean isIpv4(String s) {
+        String[] parts = s.split("[.]", -1);
+        if (parts.length != 4) {
+            return false;
         }
-        try {
-            // Literal only (checked above), so no DNS lookup happens.
-            java.net.InetAddress.getByName(value);
-            return value;
-        } catch (java.net.UnknownHostException e) {
-            return null;
+        for (String part : parts) {
+            if (!part.matches("[0-9]{1,3}") || Integer.parseInt(part) > 255) {
+                return false;
+            }
         }
+        return true;
+    }
+
+    private static boolean isIpv6(String s) {
+        if (s.indexOf(':') < 0 || !s.matches("[0-9a-fA-F:.]+")) {
+            return false;
+        }
+        int dbl = s.indexOf("::");
+        if (dbl >= 0 && s.indexOf("::", dbl + 1) >= 0) {
+            return false;
+        }
+        String head = dbl >= 0 ? s.substring(0, dbl) : s;
+        String tail = dbl >= 0 ? s.substring(dbl + 2) : "";
+        int groups = 0;
+        for (String side : dbl >= 0 ? new String[] {head, tail} : new String[] {head}) {
+            if (side.isEmpty()) {
+                continue;
+            }
+            String[] parts = side.split(":", -1);
+            for (int i = 0; i < parts.length; i++) {
+                String part = parts[i];
+                boolean last = side == (dbl >= 0 ? tail : head) && i == parts.length - 1;
+                if (last && part.indexOf('.') >= 0) {
+                    if (!isIpv4(part)) {
+                        return false;
+                    }
+                    groups += 2;
+                } else if (part.matches("[0-9a-fA-F]{1,4}")) {
+                    groups++;
+                } else {
+                    return false;
+                }
+            }
+        }
+        return dbl >= 0 ? groups < 8 : groups == 8;
     }
 
     private String toJson(Map<String, Object> details) {
