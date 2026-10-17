@@ -11,24 +11,31 @@ CREATE POLICY tenants_platform_update ON tenants FOR UPDATE
     USING (current_setting('app.platform', true) = 'on')
     WITH CHECK (current_setting('app.platform', true) = 'on');
 
--- Tenant-scoped tables.
+-- Tenant-scoped tables. Tenant policies also exclude the platform context, so a mixed
+-- platform + tenant setting can never expose tenant data (memberships excepted, see below).
 ALTER TABLE dispute_cases ENABLE ROW LEVEL SECURITY;
 ALTER TABLE dispute_cases FORCE ROW LEVEL SECURITY;
 CREATE POLICY dispute_cases_tenant ON dispute_cases FOR ALL
-    USING (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid)
-    WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
+    USING (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid
+        AND coalesce(current_setting('app.platform', true), '') <> 'on')
+    WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid
+        AND coalesce(current_setting('app.platform', true), '') <> 'on');
 
 ALTER TABLE evidence_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE evidence_items FORCE ROW LEVEL SECURITY;
 CREATE POLICY evidence_items_tenant ON evidence_items FOR ALL
-    USING (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid)
-    WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
+    USING (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid
+        AND coalesce(current_setting('app.platform', true), '') <> 'on')
+    WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid
+        AND coalesce(current_setting('app.platform', true), '') <> 'on');
 
 ALTER TABLE case_transitions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE case_transitions FORCE ROW LEVEL SECURITY;
 CREATE POLICY case_transitions_tenant ON case_transitions FOR ALL
-    USING (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid)
-    WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
+    USING (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid
+        AND coalesce(current_setting('app.platform', true), '') <> 'on')
+    WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid
+        AND coalesce(current_setting('app.platform', true), '') <> 'on');
 
 ALTER TABLE memberships ENABLE ROW LEVEL SECURITY;
 ALTER TABLE memberships FORCE ROW LEVEL SECURITY;
@@ -46,8 +53,10 @@ CREATE POLICY memberships_platform ON memberships FOR ALL
 ALTER TABLE audit_events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE audit_events FORCE ROW LEVEL SECURITY;
 CREATE POLICY audit_events_tenant ON audit_events FOR ALL
-    USING (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid)
-    WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
+    USING (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid
+        AND coalesce(current_setting('app.platform', true), '') <> 'on')
+    WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid
+        AND coalesce(current_setting('app.platform', true), '') <> 'on');
 -- Platform admins read only platform events, never tenant audit.
 CREATE POLICY audit_events_platform_read ON audit_events FOR SELECT
     USING (current_setting('app.platform', true) = 'on' AND tenant_id IS NULL);

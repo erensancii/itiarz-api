@@ -127,7 +127,129 @@ class RlsIsolationTest {
         }
     }
 
+    // --- cross-table and platform isolation (fixed tenants A/B, one row per tenant in each table) ---
+
+    private record Seed(UUID user, UUID tenantA, UUID tenantB, UUID caseA, UUID caseB, UUID platformAudit) {
+    }
+
+    private static Seed seedAB() throws SQLException {
+        UUID user = newUser();
+        UUID a = newTenant();
+        UUID b = newTenant();
+        UUID caseA = newCaseWithChildren(a, user);
+        UUID caseB = newCaseWithChildren(b, user);
+        UUID platformAudit = UUID.randomUUID();
+        try (Connection owner = PostgresSupport.ownerConnection()) {
+            owner.setAutoCommit(false);
+            setConfig(owner, "app.platform", "on");
+            insertAudit(owner, platformAudit, null);
+            owner.commit();
+        }
+        return new Seed(user, a, b, caseA, caseB, platformAudit);
+    }
+
+    @Test
+    void tenantSettingScopesEveryTenantTable() throws SQLException {
+        Seed s = seedAB();
+        try (Connection app = PostgresSupport.appConnection()) {
+            app.setAutoCommit(false);
+            setConfig(app, "app.tenant_id", s.tenantA().toString());
+            for (String table : List.of("dispute_cases", "evidence_items", "case_transitions", "audit_events")) {
+                assertThat(count(app, "SELECT count(*) FROM " + table)).as(table).isEqualTo(1);
+                assertThat(count(app, "SELECT count(*) FROM " + table + " WHERE tenant_id = '" + s.tenantA() + "'"))
+                        .as(table).isEqualTo(1);
+            }
+            app.rollback();
+        }
+    }
+
+    @Test
+    void platformFlagSeesOnlyPlatformAuditAndNoTenantData() throws SQLException {
+        Seed s = seedAB();
+        try (Connection app = PostgresSupport.appConnection()) {
+            app.setAutoCommit(false);
+            setConfig(app, "app.platform", "on");
+            List<UUID> audit = new ArrayList<>();
+            try (PreparedStatement ps = app.prepareStatement("SELECT id FROM audit_events");
+                    ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    audit.add(rs.getObject(1, UUID.class));
+                }
+            }
+            assertThat(audit).contains(s.platformAudit());
+            assertThat(count(app, "SELECT count(*) FROM audit_events WHERE tenant_id IS NOT NULL")).isZero();
+            assertThat(count(app, "SELECT count(*) FROM dispute_cases")).isZero();
+            assertThat(count(app, "SELECT count(*) FROM evidence_items")).isZero();
+            app.rollback();
+        }
+    }
+
+    @Test
+    void platformFlagCombinedWithTenantSettingStillHidesTenantData() throws SQLException {
+        Seed s = seedAB();
+        try (Connection app = PostgresSupport.appConnection()) {
+            app.setAutoCommit(false);
+            setConfig(app, "app.platform", "on");
+            setConfig(app, "app.tenant_id", s.tenantA().toString());
+            assertThat(count(app, "SELECT count(*) FROM dispute_cases")).isZero();
+            app.rollback();
+        }
+    }
+
+    @Test
+    void platformCanWriteAuditForAnyTenant() throws SQLException {
+        Seed s = seedAB();
+        try (Connection app = PostgresSupport.appConnection()) {
+            app.setAutoCommit(false);
+            setConfig(app, "app.platform", "on");
+            insertAudit(app, UUID.randomUUID(), s.tenantB());
+            app.commit();
+        }
+    }
+
+    @Test
+    void appRoleCannotMoveRowToAnotherTenant() throws SQLException {
+        Seed s = seedAB();
+        try (Connection app = PostgresSupport.appConnection()) {
+            app.setAutoCommit(false);
+            setConfig(app, "app.tenant_id", s.tenantA().toString());
+            assertThatThrownBy(() -> execute(app,
+                    "UPDATE dispute_cases SET tenant_id = '" + s.tenantB() + "' WHERE id = '" + s.caseA() + "'"))
+                    .isInstanceOf(SQLException.class)
+                    .extracting(e -> ((SQLException) e).getSQLState())
+                    .isEqualTo("42501");
+            app.rollback();
+        }
+    }
+
     // --- fixtures (owner role; tenant tables are FORCE RLS so the owner sets app.tenant_id too) ---
+
+    /** One case plus one evidence item, one transition and one audit row, all in {@code tenant}. */
+    private static UUID newCaseWithChildren(UUID tenant, UUID user) throws SQLException {
+        try (Connection owner = PostgresSupport.ownerConnection()) {
+            owner.setAutoCommit(false);
+            setConfig(owner, "app.tenant_id", tenant.toString());
+            UUID caseId = insertCase(owner, tenant, user);
+            execute(owner, "INSERT INTO evidence_items (id, case_id, kind, note, created_utc, tenant_id, created_by) "
+                    + "VALUES ('" + UUID.randomUUID() + "', '" + caseId + "', 'RECEIPT', 'n', now(), '" + tenant
+                    + "', '" + user + "')");
+            execute(owner, "INSERT INTO case_transitions (id, tenant_id, case_id, to_status, actor_id) "
+                    + "VALUES ('" + UUID.randomUUID() + "', '" + tenant + "', '" + caseId + "', 'OPEN', '" + user
+                    + "')");
+            insertAudit(owner, UUID.randomUUID(), tenant);
+            owner.commit();
+            return caseId;
+        }
+    }
+
+    private static void insertAudit(Connection c, UUID id, UUID tenant) throws SQLException {
+        try (PreparedStatement ps = c.prepareStatement(
+                "INSERT INTO audit_events (id, tenant_id, action) VALUES (?, ?, 'test.event')")) {
+            ps.setObject(1, id);
+            ps.setObject(2, tenant);
+            ps.executeUpdate();
+        }
+    }
 
     private static UUID newTenant() throws SQLException {
         UUID id = UUID.randomUUID();
@@ -188,18 +310,20 @@ class RlsIsolationTest {
         }
     }
 
-    private static void insertCase(Connection c, UUID tenant, UUID user) throws SQLException {
+    private static UUID insertCase(Connection c, UUID tenant, UUID user) throws SQLException {
+        UUID id = UUID.randomUUID();
         try (PreparedStatement ps = c.prepareStatement("""
                 INSERT INTO dispute_cases (id, tenant_id, provider, provider_case_id, order_id, reason, amount,
                                            currency, deadline_utc, status, created_utc, created_by)
                 VALUES (?, ?, 'stripe', ?, 'order-1', 'FRAUD', 10.00, 'EUR', now() + interval '7 days',
                         'OPEN', now(), ?)""")) {
-            ps.setObject(1, UUID.randomUUID());
+            ps.setObject(1, id);
             ps.setObject(2, tenant);
             ps.setString(3, "pc-" + UUID.randomUUID());
             ps.setObject(4, user);
             ps.executeUpdate();
         }
+        return id;
     }
 
     private static void setConfig(Connection c, String key, String value) throws SQLException {
