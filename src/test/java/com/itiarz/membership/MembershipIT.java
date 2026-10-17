@@ -63,6 +63,17 @@ class MembershipIT extends IntegrationTest {
 
         JsonNode list = ok(get("/api/members", adminToken));
         assertThat(list.findValuesAsText("email")).contains(email, adminEmail);
+        assertThat(body.has("userId")).isTrue();
+        assertThat(body.path("userId").isNull()).as("pending invitation has no user yet").isTrue();
+        for (JsonNode member : list) {
+            if (member.path("email").asText().equals(adminEmail)) {
+                assertThat(member.path("status").asText()).isEqualTo("ACTIVE");
+                assertThat(UUID.fromString(member.path("userId").asText()))
+                    .as("active member exposes the app user id used for case assignment").isNotNull();
+            } else if (member.path("email").asText().equals(email)) {
+                assertThat(member.path("userId").isNull()).isTrue();
+            }
+        }
     }
 
     @Test

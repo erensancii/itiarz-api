@@ -243,7 +243,7 @@ public class MembershipService {
     static MemberView view(Membership membership, AppUser user) {
         String email = user != null && user.getEmail() != null && !user.getEmail().isBlank()
                 ? user.getEmail() : membership.getInvitedEmail();
-        return new MemberView(membership.getId(), email, user == null ? null : user.getDisplayName(),
+        return new MemberView(membership.getId(), membership.getUserId(), email, user == null ? null : user.getDisplayName(),
                 membership.getRole(), membership.getStatus());
     }
 
