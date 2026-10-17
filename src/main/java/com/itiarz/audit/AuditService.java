@@ -61,10 +61,35 @@ public class AuditService {
                        Map<String, Object> details) {
         UUID actor = RequestContextHolder.current().map(RequestContext::userId).orElse(null);
         HttpServletRequest request = currentRequest();
-        String ip = request == null ? null : request.getRemoteAddr();
+        String ip = request == null ? null : normalizeIp(request.getRemoteAddr());
         String traceId = request != null ? TraceIdFilter.traceId(request) : MDC.get(TraceIdFilter.MDC_KEY);
         events.insert(UUID.randomUUID(), tenantId, actor, action, targetType, targetId, toJson(details), ip,
                 traceId);
+    }
+
+    /**
+     * Makes a remote address safe for {@code CAST(? AS inet)}: strips an IPv6 zone id
+     * ({@code fe80::1%eth0}) and returns null for anything that is not an IP literal, so an odd
+     * address can never roll back the business transaction.
+     */
+    static String normalizeIp(String raw) {
+        if (raw == null) {
+            return null;
+        }
+        int zone = raw.indexOf('%');
+        String value = (zone >= 0 ? raw.substring(0, zone) : raw).trim();
+        boolean v4 = value.matches("\\d{1,3}(\\.\\d{1,3}){3}");
+        boolean v6 = value.indexOf(':') >= 0 && value.matches("[0-9a-fA-F:.]+");
+        if (!v4 && !v6) {
+            return null;
+        }
+        try {
+            // Literal only (checked above), so no DNS lookup happens.
+            java.net.InetAddress.getByName(value);
+            return value;
+        } catch (java.net.UnknownHostException e) {
+            return null;
+        }
     }
 
     private String toJson(Map<String, Object> details) {

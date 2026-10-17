@@ -183,6 +183,65 @@ class AuditIT extends IntegrationTest {
     }
 
     @Test
+    void paginationReturnsRequestedPage() throws Exception {
+        String email = unique("admin") + "@example.com";
+        String slug = unique("acme");
+        UUID tenant = seedTenant(slug, "ACTIVE");
+        seedMember(slug, email, "TENANT_ADMIN", "ACTIVE");
+        for (int i = 0; i < 3; i++) {
+            insertAudit(tenant, null, "case.created", "case", "p-" + i, null);
+        }
+        String token = TestTokens.jwt(subOf(email), email, List.of(slug), false);
+
+        JsonNode body = JSON.readTree(get("/api/audit?page=1&size=2", token).getBody());
+        assertThat(body.path("items")).hasSize(1);
+        assertThat(body.path("total").asLong()).isEqualTo(3);
+        assertThat(body.path("page").asInt()).isEqualTo(1);
+        assertThat(body.path("size").asInt()).isEqualTo(2);
+
+        JsonNode clamped = JSON.readTree(get("/api/audit?page=-1&size=0", token).getBody());
+        assertThat(clamped.path("page").asInt()).isZero();
+        assertThat(clamped.path("size").asInt()).isEqualTo(1);
+        assertThat(clamped.path("items")).hasSize(1);
+    }
+
+    @Test
+    void platformAdminWithoutOrgGets403OnAudit() throws Exception {
+        String email = unique("platform") + "@example.com";
+
+        ResponseEntity<String> response = get("/api/audit", TestTokens.jwt(subOf(email), email, null, true));
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(response.getHeaders().getContentType().isCompatibleWith(
+                org.springframework.http.MediaType.APPLICATION_PROBLEM_JSON)).isTrue();
+    }
+
+    @Test
+    void forwardedForHeaderIsIgnored() throws Exception {
+        String email = unique("admin") + "@example.com";
+        String slug = unique("acme");
+        UUID tenant = seedTenant(slug, "ACTIVE");
+        seedMember(slug, email, "TENANT_ADMIN", "ACTIVE");
+        org.springframework.http.HttpHeaders headers = new org.springframework.http.HttpHeaders();
+        headers.setBearerAuth(TestTokens.jwt(subOf(email), email, List.of(slug), false));
+        headers.add("X-Forwarded-For", "203.0.113.9");
+
+        ResponseEntity<String> response = rest.exchange(AuditProbeController.PATH, org.springframework.http.HttpMethod.POST,
+                new org.springframework.http.HttpEntity<>(headers), String.class);
+        assertThat(response.getStatusCode()).as(String.valueOf(response.getBody())).isEqualTo(HttpStatus.OK);
+
+        try (Connection c = PostgresSupport.ownerConnection()) {
+            setLocal(c, "app.tenant_id", tenant.toString());
+            try (PreparedStatement ps = c.prepareStatement("SELECT host(ip) FROM audit_events");
+                 ResultSet rs = ps.executeQuery()) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getString(1)).isNotNull().isNotEqualTo("203.0.113.9");
+            }
+        }
+    }
+
+
+    @Test
     void recordWithoutTransactionIsRejected() {
         assertThatThrownBy(() -> auditService.recordPlatform(AuditActions.TENANT_CREATED, "tenant", "x", null))
                 .isInstanceOf(IllegalTransactionStateException.class);
