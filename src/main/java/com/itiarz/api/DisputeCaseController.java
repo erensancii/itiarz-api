@@ -1,7 +1,7 @@
-package com.disputepilot.api;
+package com.itiarz.api;
 
-import com.disputepilot.api.CaseDtos.*;
-import com.disputepilot.service.DisputeCaseService;
+import com.itiarz.api.CaseDtos.*;
+import com.itiarz.service.DisputeCaseService;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;

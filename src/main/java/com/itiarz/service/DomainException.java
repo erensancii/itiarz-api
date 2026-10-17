@@ -1,4 +1,4 @@
-package com.disputepilot.service;
+package com.itiarz.service;
 
 import org.springframework.http.HttpStatus;
 

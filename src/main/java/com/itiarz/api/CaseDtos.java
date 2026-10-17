@@ -1,7 +1,7 @@
-package com.disputepilot.api;
+package com.itiarz.api;
 
-import com.disputepilot.domain.CaseReason;
-import com.disputepilot.domain.CaseStatus;
+import com.itiarz.domain.CaseReason;
+import com.itiarz.domain.CaseStatus;
 import jakarta.validation.constraints.*;
 import java.math.BigDecimal;
 import java.time.Instant;

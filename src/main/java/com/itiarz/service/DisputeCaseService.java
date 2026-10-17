@@ -1,8 +1,8 @@
-package com.disputepilot.service;
+package com.itiarz.service;
 
-import com.disputepilot.api.CaseDtos.*;
-import com.disputepilot.domain.*;
-import com.disputepilot.repo.DisputeCaseRepository;
+import com.itiarz.api.CaseDtos.*;
+import com.itiarz.domain.*;
+import com.itiarz.repo.DisputeCaseRepository;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;

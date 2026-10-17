@@ -1,6 +1,6 @@
-package com.disputepilot.repo;
+package com.itiarz.repo;
 
-import com.disputepilot.domain.DisputeCase;
+import com.itiarz.domain.DisputeCase;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;

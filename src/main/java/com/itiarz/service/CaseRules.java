@@ -1,7 +1,7 @@
-package com.disputepilot.service;
+package com.itiarz.service;
 
-import com.disputepilot.domain.CaseReason;
-import com.disputepilot.domain.CaseStatus;
+import com.itiarz.domain.CaseReason;
+import com.itiarz.domain.CaseStatus;
 import java.util.List;
 import java.util.Set;
 

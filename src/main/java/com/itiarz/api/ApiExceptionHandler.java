@@ -1,6 +1,6 @@
-package com.disputepilot.api;
+package com.itiarz.api;
 
-import com.disputepilot.service.DomainException;
+import com.itiarz.service.DomainException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;

@@ -1,4 +1,4 @@
-package com.disputepilot.domain;
+package com.itiarz.domain;
 
 import jakarta.persistence.*;
 import java.math.BigDecimal;

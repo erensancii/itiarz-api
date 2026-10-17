@@ -1,8 +1,8 @@
-package com.disputepilot.config;
+package com.itiarz.config;
 
-import com.disputepilot.domain.CaseReason;
-import com.disputepilot.domain.DisputeCase;
-import com.disputepilot.repo.DisputeCaseRepository;
+import com.itiarz.domain.CaseReason;
+import com.itiarz.domain.DisputeCase;
+import com.itiarz.repo.DisputeCaseRepository;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
