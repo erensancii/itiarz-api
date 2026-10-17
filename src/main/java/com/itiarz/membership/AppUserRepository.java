@@ -25,12 +25,14 @@ public interface AppUserRepository extends JpaRepository<AppUser, UUID> {
 
     /**
      * Finds or creates the user for a token subject and syncs e-mail/name (null = claim absent, keep
-     * stored value; a new user without an e-mail claim gets ''). Call inside a transaction.
+     * stored value; a new user without an e-mail claim gets ''). A new user stores the claimed e-mail even
+     * when unverified (there is no prior value); an existing e-mail is only replaced by a verified claim
+     * (see {@link AppUser#refresh}). Call inside a transaction.
      */
-    default AppUser provision(String keycloakUserId, String email, String displayName) {
+    default AppUser provision(String keycloakUserId, String email, boolean emailVerified, String displayName) {
         Optional<AppUser> existing = findByKeycloakUserId(keycloakUserId);
         if (existing.isPresent()) {
-            existing.get().refresh(email, displayName, Instant.now());
+            existing.get().refresh(email, emailVerified, displayName, Instant.now());
             return existing.get();
         }
         insertIfAbsent(UUID.randomUUID(), keycloakUserId, email == null ? "" : email, displayName);

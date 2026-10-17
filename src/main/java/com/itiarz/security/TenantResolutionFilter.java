@@ -93,7 +93,7 @@ public class TenantResolutionFilter extends OncePerRequestFilter {
     private RequestContext resolve(JwtClaims claims) {
         // 1) identity (app_users has no RLS); 2) bind app.user_id so the self-read membership policy applies.
         AppUser user = transactions.execute(status -> users.provision(
-                claims.subject(), claims.email(), truncate(claims.name())));
+                claims.subject(), claims.email(), claims.emailVerified(), truncate(claims.name())));
         RequestContext base = new RequestContext(user.getId(), claims.subject(), user.getEmail(),
                 claims.platformAdmin(), null, null, null);
         RequestContextHolder.set(base);

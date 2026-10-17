@@ -1,5 +1,8 @@
 package com.itiarz.audit;
 
+import java.time.Instant;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -9,6 +12,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import org.slf4j.MDC;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -20,7 +24,7 @@ import com.itiarz.security.RequestContext;
 import com.itiarz.security.RequestContextHolder;
 
 /**
- * Append-only audit writer. Every method joins the caller's transaction
+ * Append-only audit writer and tenant audit reader. Every write method joins the caller's transaction
  * ({@link Propagation#MANDATORY}) so an event commits or rolls back with the business change.
  * <ul>
  *   <li>{@link #record}: tenant event, tenant id from the current request context (tenant mode).</li>
@@ -28,11 +32,15 @@ import com.itiarz.security.RequestContextHolder;
  *   <li>{@link #recordForTenant}: platform mode only, writes an event into an explicit tenant
  *       (e.g. {@code member.invited} for a tenant just created).</li>
  * </ul>
- * Actor, client IP ({@code getRemoteAddr}, no proxy header trust) and trace id come from the
- * context/request when present.
+ * Actor and trace id come from the context/request when present. The actor's e-mail at write time is
+ * stored as {@code details.actorEmail}, so a later e-mail change never re-attributes history. The
+ * {@code ip} column stays NULL: behind the BFF there is no trustworthy client address.
  */
 @Service
 public class AuditService {
+    static final int MAX_SIZE = 200;
+    static final String ACTOR_EMAIL = "actorEmail";
+
     private final AuditEventRepository events;
     private final ObjectMapper objectMapper;
 
@@ -40,6 +48,13 @@ public class AuditService {
         this.events = events;
         this.objectMapper = objectMapper;
     }
+
+    public record Actor(String email) { }
+
+    public record Item(Instant occurredAt, Actor actor, String action, String targetType, String targetId,
+                       Map<String, Object> details) { }
+
+    public record AuditPage(List<Item> items, int page, int size, long total) { }
 
     @Transactional(propagation = Propagation.MANDATORY)
     public void record(String action, String targetType, String targetId, Map<String, Object> details) {
@@ -57,79 +72,43 @@ public class AuditService {
         write(tenantId, action, targetType, targetId, details);
     }
 
+    /**
+     * One page of {@code tenantId}'s events, newest first ({@code page} ≥ 0, {@code size} clamped to
+     * 1..200). The actor e-mail recorded at write time wins over the user's current e-mail.
+     */
+    @Transactional(readOnly = true)
+    public AuditPage page(UUID tenantId, int page, int size) {
+        int safePage = Math.max(page, 0);
+        int safeSize = Math.min(Math.max(size, 1), MAX_SIZE);
+        var result = events.findPage(tenantId, PageRequest.of(safePage, safeSize));
+        List<Item> items = result.getContent().stream().map(AuditService::item).toList();
+        return new AuditPage(items, safePage, safeSize, result.getTotalElements());
+    }
+
+    private static Item item(AuditEventRepository.Row row) {
+        AuditEvent e = row.event();
+        Map<String, Object> details = e.getDetails() == null ? null : new LinkedHashMap<>(e.getDetails());
+        Object recorded = details == null ? null : details.remove(ACTOR_EMAIL);
+        String email = recorded instanceof String s && !s.isBlank() ? s : row.actorEmail();
+        Actor actor = email == null || email.isBlank() ? null : new Actor(email);
+        // details that only carried the actor e-mail were null when written
+        boolean onlyActorEmail = recorded != null && details.isEmpty();
+        return new Item(e.getOccurredAt(), actor, e.getAction(), e.getTargetType(), e.getTargetId(),
+                onlyActorEmail ? null : details);
+    }
+
     private void write(UUID tenantId, String action, String targetType, String targetId,
                        Map<String, Object> details) {
-        UUID actor = RequestContextHolder.current().map(RequestContext::userId).orElse(null);
+        RequestContext context = RequestContextHolder.current().orElse(null);
+        UUID actor = context == null ? null : context.userId();
+        Map<String, Object> stored = details;
+        if (actor != null && context.email() != null && !context.email().isBlank()) {
+            stored = details == null ? new LinkedHashMap<>() : new LinkedHashMap<>(details);
+            stored.put(ACTOR_EMAIL, context.email());
+        }
         HttpServletRequest request = currentRequest();
-        String ip = request == null ? null : normalizeIp(request.getRemoteAddr());
         String traceId = request != null ? TraceIdFilter.traceId(request) : MDC.get(TraceIdFilter.MDC_KEY);
-        events.insert(UUID.randomUUID(), tenantId, actor, action, targetType, targetId, toJson(details), ip,
-                traceId);
-    }
-
-    /**
-     * Makes a remote address safe for {@code CAST(? AS inet)}: strips an IPv6 zone id
-     * ({@code fe80::1%eth0}) and returns null for anything that is not a strictly valid IPv4/IPv6
-     * literal, so an odd address can never roll back the business transaction. Pure string
-     * validation; no resolver is ever called.
-     */
-    static String normalizeIp(String raw) {
-        if (raw == null) {
-            return null;
-        }
-        int zone = raw.indexOf('%');
-        String value = (zone >= 0 ? raw.substring(0, zone) : raw).trim();
-        return isIpv4(value) || isIpv6(value) ? value : null;
-    }
-
-    private static boolean isIpv4(String s) {
-        String[] parts = s.split("[.]", -1);
-        if (parts.length != 4) {
-            return false;
-        }
-        for (String part : parts) {
-            if (!part.matches("[0-9]{1,3}") || (part.length() > 1 && part.charAt(0) == '0')
-                    || Integer.parseInt(part) > 255) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private static boolean isIpv6(String s) {
-        if (s.indexOf(':') < 0 || !s.matches("[0-9a-fA-F:.]+")) {
-            return false;
-        }
-        int dbl = s.indexOf("::");
-        if (dbl >= 0 && s.indexOf("::", dbl + 1) >= 0) {
-            return false;
-        }
-        String head = dbl >= 0 ? s.substring(0, dbl) : s;
-        String tail = dbl >= 0 ? s.substring(dbl + 2) : "";
-        int groups = 0;
-        String[] sides = dbl >= 0 ? new String[] {head, tail} : new String[] {head};
-        for (int sideIdx = 0; sideIdx < sides.length; sideIdx++) {
-            String side = sides[sideIdx];
-            if (side.isEmpty()) {
-                continue;
-            }
-            String[] parts = side.split(":", -1);
-            for (int i = 0; i < parts.length; i++) {
-                String part = parts[i];
-                boolean last = sideIdx == sides.length - 1 && i == parts.length - 1;
-                if (last && part.indexOf('.') >= 0) {
-                    if (!isIpv4(part)) {
-                        return false;
-                    }
-                    groups += 2;
-                } else if (part.matches("[0-9a-fA-F]{1,4}")) {
-                    groups++;
-                } else {
-                    return false;
-                }
-            }
-        }
-        return dbl >= 0 ? groups < 8 : groups == 8;
+        events.insert(UUID.randomUUID(), tenantId, actor, action, targetType, targetId, toJson(stored), traceId);
     }
 
     private String toJson(Map<String, Object> details) {

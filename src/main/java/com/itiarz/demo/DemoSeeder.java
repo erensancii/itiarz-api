@@ -233,7 +233,7 @@ public class DemoSeeder {
         Map<String, UUID> userIds = new LinkedHashMap<>();
         List<String> live = new ArrayList<>();
         for (MemberSeed member : seed.members()) {
-            AppUser user = users.provision(keycloakIds.get(member.email()), member.email(),
+            AppUser user = users.provision(keycloakIds.get(member.email()), member.email(), true,
                     DISPLAY_NAMES.get(member.email()));
             Membership membership = membershipService.ensureMember(tenant.getId(), user.getId(), member.email(),
                     member.role());

@@ -244,6 +244,24 @@ class TenantResolutionIT extends IntegrationTest {
         assertThat(countAppUsers(sub)).isEqualTo(1);
     }
 
+    @Test
+    void unverifiedEmailClaimDoesNotOverwriteStoredEmail() {
+        String email = unique("kalici") + "@example.com";
+        String sub = "kc-" + unique("verified");
+        assertThat(get("/api/me", TestTokens.jwt(sub, email, null, false)).getStatusCode()).isEqualTo(HttpStatus.OK);
+
+        String other = unique("baskasi") + "@example.com";
+        String unverified = TestTokens.sign(TestTokens.claims(sub, other, null, false)
+                .claim("email_verified", false).build());
+        ResponseEntity<String> response = get("/api/me", unverified);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(json(response).path("user").path("email").asText()).isEqualTo(email);
+
+        String verified = TestTokens.jwt(sub, other, null, false);
+        assertThat(json(get("/api/me", verified)).path("user").path("email").asText()).isEqualTo(other);
+    }
+
     private static void assertProblemJson(ResponseEntity<String> response) {
         assertThat(response.getHeaders().getContentType()).isNotNull();
         assertThat(response.getHeaders().getContentType().isCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))

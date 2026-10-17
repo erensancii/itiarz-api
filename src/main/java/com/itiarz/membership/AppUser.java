@@ -44,11 +44,13 @@ public class AppUser {
     public Instant getLastLoginAt() { return lastLoginAt; }
 
     /**
-     * Syncs identity fields from the token; a missing (null) claim keeps the stored value.
-     * last_login_at is refreshed at most hourly (no write per request).
+     * Syncs identity fields from the token; a missing (null) claim keeps the stored value. The e-mail is
+     * overwritten only from a verified claim ({@code email_verified=true}); an unverified claim may only
+     * fill an empty stored e-mail, so a user cannot re-attribute themselves by changing an unverified
+     * address. last_login_at is refreshed at most hourly (no write per request).
      */
-    void refresh(String email, String displayName, Instant now) {
-        if (email != null) {
+    void refresh(String email, boolean emailVerified, String displayName, Instant now) {
+        if (email != null && (emailVerified || this.email == null || this.email.isBlank())) {
             this.email = email;
         }
         if (displayName != null) {
