@@ -124,14 +124,25 @@ public abstract class IntegrationTest {
         return rest.exchange(path, HttpMethod.PATCH, new HttpEntity<>(json, headers), String.class);
     }
 
+    protected ResponseEntity<String> delete(String path, String token) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.setBearerAuth(token);
+        return rest.exchange(path, HttpMethod.DELETE, new HttpEntity<>(headers), String.class);
+    }
+
     /** Inserts a tenant through the platform path (tenants allow writes only when app.platform='on'). */
     protected UUID seedTenant(String slug, String status) {
+        return seedTenant(slug, status, UUID.randomUUID().toString());
+    }
+
+    /** Like {@link #seedTenant(String, String)} with an explicit Keycloak organization id (e.g. a fake org). */
+    protected UUID seedTenant(String slug, String status, String keycloakOrgId) {
         UUID id = UUID.randomUUID();
         try (Connection c = platformConnection();
              PreparedStatement ps = c.prepareStatement(
                      "INSERT INTO tenants (id, keycloak_org_id, slug, name, status) VALUES (?, ?, ?, ?, ?)")) {
             ps.setObject(1, id);
-            ps.setString(2, UUID.randomUUID().toString());
+            ps.setString(2, keycloakOrgId);
             ps.setString(3, slug);
             ps.setString(4, "Tenant " + slug);
             ps.setString(5, status);

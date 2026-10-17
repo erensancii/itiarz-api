@@ -102,17 +102,23 @@ public class TenantResolutionFilter extends OncePerRequestFilter {
             return base;
         }
         String slug = claims.organizations().get(0);
-        RequestContext resolved = transactions.execute(status -> {
-            Tenant tenant = tenants.findBySlug(slug).orElseThrow(TenantResolutionFilter::noMembership);
-            if (!tenant.isActive()) {
-                throw new DomainException(HttpStatus.FORBIDDEN, ErrorCode.TENANT_SUSPENDED,
-                        "Bu şirketin hesabı askıya alınmış. Ayrıntılar için şirket yöneticinizle iletişime geçin.");
-            }
-            Membership membership = membershipResolver.resolveActive(tenant.getId(), user)
-                    .orElseThrow(TenantResolutionFilter::noMembership);
-            return new RequestContext(base.userId(), base.keycloakUserId(), base.email(), base.platformAdmin(),
-                    tenant.getId(), tenant.getSlug(), membership.getRole());
-        });
+        // 3) tenant lookup (tenants are readable without a tenant context)
+        Tenant tenant = transactions.execute(status -> tenants.findBySlug(slug))
+                .orElseThrow(TenantResolutionFilter::noMembership);
+        if (!tenant.isActive()) {
+            throw new DomainException(HttpStatus.FORBIDDEN, ErrorCode.TENANT_SUSPENDED,
+                    "Bu şirketin hesabı askıya alınmış. Ayrıntılar için şirket yöneticinizle iletişime geçin.");
+        }
+        // 4) membership in a transaction that begins with app.tenant_id set, so a pending invitation
+        // (no user id yet) is visible and can be activated. The provisional context carries no role
+        // (no permissions); on failure the finally block of doFilterInternal clears it.
+        RequestContextHolder.set(new RequestContext(base.userId(), base.keycloakUserId(), base.email(),
+                base.platformAdmin(), tenant.getId(), tenant.getSlug(), null));
+        Membership membership = transactions.execute(status -> membershipResolver.resolveActive(
+                        tenant.getId(), user, claims.email(), claims.emailVerified()))
+                .orElseThrow(TenantResolutionFilter::noMembership);
+        RequestContext resolved = new RequestContext(base.userId(), base.keycloakUserId(), base.email(),
+                base.platformAdmin(), tenant.getId(), tenant.getSlug(), membership.getRole());
         RequestContextHolder.set(resolved);
         return resolved;
     }

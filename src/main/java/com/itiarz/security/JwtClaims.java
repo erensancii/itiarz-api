@@ -10,9 +10,10 @@ import org.springframework.security.oauth2.jwt.Jwt;
 
 /**
  * The Keycloak claims the backend uses (spec §3.2). {@code organization} arrives either as a list
- * of aliases or, when org id/attributes are mapped, as an object keyed by alias.
+ * of aliases or, when org id/attributes are mapped, as an object keyed by alias. {@code emailVerified}
+ * is true only for an explicit {@code email_verified=true} claim.
  */
-public record JwtClaims(String subject, String email, String name, boolean platformAdmin,
+public record JwtClaims(String subject, String email, boolean emailVerified, String name, boolean platformAdmin,
                         List<String> organizations) {
 
     public static final String PLATFORM_ADMIN_ROLE = "platform-admin";
@@ -22,6 +23,7 @@ public record JwtClaims(String subject, String email, String name, boolean platf
         return new JwtClaims(
                 jwt.getSubject(),
                 email == null ? null : email.trim().toLowerCase(Locale.ROOT),
+                Boolean.TRUE.equals(jwt.getClaimAsBoolean("email_verified")),
                 jwt.getClaimAsString("name"),
                 realmRoles(jwt).contains(PLATFORM_ADMIN_ROLE),
                 organizations(jwt.getClaim("organization")));

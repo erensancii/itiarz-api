@@ -34,6 +34,13 @@ class JwtClaimsTest {
     }
 
     @Test
+    void emailVerifiedOnlyWhenExplicitlyTrue() {
+        assertThat(JwtClaims.from(token(Map.of("email_verified", true))).emailVerified()).isTrue();
+        assertThat(JwtClaims.from(token(Map.of("email_verified", false))).emailVerified()).isFalse();
+        assertThat(JwtClaims.from(token(Map.of())).emailVerified()).isFalse();
+    }
+
+    @Test
     void emailIsNormalisedAndPlatformAdminRead() {
         JwtClaims claims = JwtClaims.from(token(Map.of(
                 "email", "Ayse.YILMAZ@Example.COM",

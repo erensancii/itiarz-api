@@ -48,6 +48,21 @@ public class Membership {
     protected Membership() {
     }
 
+    /** A new pending invitation; {@code normalizedEmail} must already be lower-case (DB check). */
+    static Membership invitation(UUID tenantId, String normalizedEmail, TenantRole role, UUID invitedBy) {
+        Membership m = new Membership();
+        Instant now = Instant.now();
+        m.id = UUID.randomUUID();
+        m.tenantId = tenantId;
+        m.invitedEmail = normalizedEmail;
+        m.role = role;
+        m.status = MembershipStatus.INVITED;
+        m.invitedBy = invitedBy;
+        m.createdAt = now;
+        m.updatedAt = now;
+        return m;
+    }
+
     public UUID getId() { return id; }
     public UUID getTenantId() { return tenantId; }
     public UUID getUserId() { return userId; }
@@ -57,4 +72,34 @@ public class Membership {
     public UUID getInvitedBy() { return invitedBy; }
     public Instant getCreatedAt() { return createdAt; }
     public Instant getUpdatedAt() { return updatedAt; }
+
+    /** Re-invites a REMOVED row in place (same id); the linked user, if any, is kept until activation. */
+    void reinvite(TenantRole role, UUID invitedBy) {
+        this.role = role;
+        this.invitedBy = invitedBy;
+        this.status = MembershipStatus.INVITED;
+        touch();
+    }
+
+    /** Invitation accepted: binds the user and grants access. */
+    void activate(UUID userId) {
+        this.userId = userId;
+        this.status = MembershipStatus.ACTIVE;
+        touch();
+    }
+
+    void changeRole(TenantRole role) {
+        this.role = role;
+        touch();
+    }
+
+    /** Soft removal: the row is kept for history and can be re-invited. */
+    void remove() {
+        this.status = MembershipStatus.REMOVED;
+        touch();
+    }
+
+    private void touch() {
+        updatedAt = Instant.now();
+    }
 }
