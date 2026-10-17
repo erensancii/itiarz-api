@@ -60,6 +60,13 @@ public abstract class IntegrationTest {
             decoder.setJwtValidator(SecurityConfig.jwtValidator(TestTokens.ISSUER));
             return decoder;
         }
+
+        /** Replaces the HTTP gateway so no integration test needs a running Keycloak. */
+        @Bean
+        @Primary
+        FakeKeycloakGateway fakeKeycloakGateway() {
+            return new FakeKeycloakGateway();
+        }
     }
 
     /**

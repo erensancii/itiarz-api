@@ -32,6 +32,12 @@ management:
         include: health
 
 app:
+  keycloak:
+    # Admin API (client_credentials, service account of itiarz-api-admin) over the internal network
+    internal-url: ${KC_INTERNAL_URL:http://localhost:8081}
+    realm: ${KC_REALM:itiarz}
+    admin-client-id: itiarz-api-admin
+    admin-client-secret: ${KC_ADMIN_CLIENT_SECRET:admin_secret_dev_only_change_me}
   seed-demo: ${SEED_DEMO:true}
   security:
     keycloak:

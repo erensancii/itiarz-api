@@ -25,6 +25,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.itiarz.keycloak.KeycloakUnavailableException;
 
 /**
  * Renders every error as RFC 9457 problem+json with {@code code} and {@code traceId} (spec §8).
@@ -43,6 +44,13 @@ public class ProblemDetailsHandler {
     @ExceptionHandler(DomainException.class)
     ResponseEntity<ProblemDetail> domain(DomainException ex, HttpServletRequest request) {
         return respond(problem(ex.status(), ex.code(), ex.getMessage(), request));
+    }
+
+    @ExceptionHandler(KeycloakUnavailableException.class)
+    ResponseEntity<ProblemDetail> keycloakUnavailable(KeycloakUnavailableException ex, HttpServletRequest request) {
+        log.error("Keycloak unavailable [traceId={}]", TraceIdFilter.traceId(request), ex);
+        return respond(problem(HttpStatus.BAD_GATEWAY, ErrorCode.KEYCLOAK_UNAVAILABLE,
+                "Kimlik hizmetine şu an ulaşılamıyor. Lütfen biraz sonra tekrar deneyin.", request));
     }
 
     @ExceptionHandler(FieldValidationException.class)
