@@ -38,7 +38,8 @@ app:
     realm: ${KC_REALM:itiarz}
     admin-client-id: itiarz-api-admin
     admin-client-secret: ${KC_ADMIN_CLIENT_SECRET:admin_secret_dev_only_change_me}
-  seed-demo: ${SEED_DEMO:true}
+  # demo tenants, members and cases (DemoSeeder); docker-compose enables it for local dev
+  seed-demo: ${SEED_DEMO:false}
   security:
     keycloak:
       # issuer as seen by browsers/tokens (iss = public-url/realms/<realm>)

@@ -56,6 +56,13 @@ public class CaseTransition implements Persistable<UUID> {
         this.reason = reason;
     }
 
+    /** As above with an explicit timestamp (seeding a history whose rows must keep their order). */
+    public CaseTransition(DisputeCase dispute, CaseStatus fromStatus, CaseStatus toStatus, UUID actorId,
+                          String reason, Instant occurredAt) {
+        this(dispute, fromStatus, toStatus, actorId, reason);
+        this.occurredAt = occurredAt;
+    }
+
     @Override
     public UUID getId() { return id; }
 

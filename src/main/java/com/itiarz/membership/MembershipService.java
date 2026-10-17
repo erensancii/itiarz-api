@@ -159,6 +159,27 @@ public class MembershipService {
     }
 
     /**
+     * <strong>System use only</strong> (demo seeding): idempotently makes {@code email} an ACTIVE member
+     * of the tenant with {@code role}, bound to {@code userId}. Creates the row if missing, otherwise
+     * fixes role, status and user link in place; an already matching row is left untouched (no write).
+     * No audit event and no Keycloak call. Joins the caller's transaction, which must be in platform mode.
+     */
+    @Transactional
+    public Membership ensureActiveMember(UUID tenantId, UUID userId, String email, TenantRole role) {
+        String normalized = normalizeEmail(email);
+        Membership membership = memberships.findByTenantIdAndInvitedEmail(tenantId, normalized)
+                .orElseGet(() -> memberships.save(Membership.invitation(tenantId, normalized, role, null)));
+        if (membership.getRole() != role) {
+            membership.changeRole(role);
+        }
+        if (membership.getStatus() != MembershipStatus.ACTIVE || !userId.equals(membership.getUserId())) {
+            membership.activate(userId);
+        }
+        memberships.flush();
+        return membership;
+    }
+
+    /**
      * Changes a member's role in the caller's tenant. Demoting the last active TENANT_ADMIN is 409
      * LAST_ADMIN; changing one's own role is 409 CONFLICT. Setting the current role is a no-op.
      */

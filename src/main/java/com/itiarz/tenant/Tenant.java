@@ -53,6 +53,14 @@ public class Tenant {
         this.status = status;
     }
 
+    /**
+     * Points the tenant at another Keycloak organization with the same alias (system use: the demo
+     * seeder re-syncs after Keycloak was recreated while the database was kept). Platform mode only.
+     */
+    public void relinkKeycloakOrganization(String keycloakOrgId) {
+        this.keycloakOrgId = keycloakOrgId;
+    }
+
     public UUID getId() { return id; }
     public String getKeycloakOrgId() { return keycloakOrgId; }
     public String getSlug() { return slug; }

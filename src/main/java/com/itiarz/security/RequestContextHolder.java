@@ -66,6 +66,36 @@ public final class RequestContextHolder {
         }
     }
 
+    /**
+     * <strong>System use only</strong> (e.g. the demo seeder; never from request handling): runs
+     * {@code work} with a user-less context for {@code tenantId} and platform mode off, so transactions
+     * that <em>begin</em> inside it get {@code app.tenant_id=tenantId} and may read/write that tenant's
+     * case data under RLS. The previous context and platform flag are restored afterwards.
+     */
+    public static <T> T runAsTenant(UUID tenantId, Supplier<T> work) {
+        if (tenantId == null) {
+            throw new IllegalArgumentException("tenantId is required");
+        }
+        RequestContext previousContext = CONTEXT.get();
+        Boolean previousPlatform = PLATFORM.get();
+        CONTEXT.set(new RequestContext(null, null, null, false, tenantId, null, null));
+        PLATFORM.remove();
+        try {
+            return work.get();
+        } finally {
+            if (previousContext == null) {
+                CONTEXT.remove();
+            } else {
+                CONTEXT.set(previousContext);
+            }
+            if (previousPlatform == null) {
+                PLATFORM.remove();
+            } else {
+                PLATFORM.set(previousPlatform);
+            }
+        }
+    }
+
     public static boolean platformMode() {
         return Boolean.TRUE.equals(PLATFORM.get());
     }
