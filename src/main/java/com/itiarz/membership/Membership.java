@@ -88,6 +88,12 @@ public class Membership {
         touch();
     }
 
+    /** Sets the user link without changing the status (seed repair of a row whose link is empty). */
+    void bindUser(UUID userId) {
+        this.userId = userId;
+        touch();
+    }
+
     /** Releases the user link of a non-active row, so the user can be bound to another row of the tenant. */
     void unlinkUser() {
         this.userId = null;

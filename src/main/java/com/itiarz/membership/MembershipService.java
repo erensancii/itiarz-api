@@ -159,21 +159,21 @@ public class MembershipService {
     }
 
     /**
-     * <strong>System use only</strong> (demo seeding): idempotently makes {@code email} an ACTIVE member
-     * of the tenant with {@code role}, bound to {@code userId}. Creates the row if missing, otherwise
-     * fixes role, status and user link in place; an already matching row is left untouched (no write).
+     * <strong>System use only</strong> (demo seeding): creates {@code email}'s membership in the tenant
+     * as ACTIVE with {@code role}, bound to {@code userId}, <em>only if no row exists</em>. An existing row
+     * keeps its role and status (changes made through the app, including removal, survive a re-seed);
+     * the only repair is binding {@code userId} to a non-removed row whose user link is still empty.
      * No audit event and no Keycloak call. Joins the caller's transaction, which must be in platform mode.
      */
     @Transactional
-    public Membership ensureActiveMember(UUID tenantId, UUID userId, String email, TenantRole role) {
+    public Membership ensureMember(UUID tenantId, UUID userId, String email, TenantRole role) {
         String normalized = normalizeEmail(email);
-        Membership membership = memberships.findByTenantIdAndInvitedEmail(tenantId, normalized)
-                .orElseGet(() -> memberships.save(Membership.invitation(tenantId, normalized, role, null)));
-        if (membership.getRole() != role) {
-            membership.changeRole(role);
-        }
-        if (membership.getStatus() != MembershipStatus.ACTIVE || !userId.equals(membership.getUserId())) {
+        Membership membership = memberships.findByTenantIdAndInvitedEmail(tenantId, normalized).orElse(null);
+        if (membership == null) {
+            membership = memberships.save(Membership.invitation(tenantId, normalized, role, null));
             membership.activate(userId);
+        } else if (membership.getUserId() == null && membership.getStatus() != MembershipStatus.REMOVED) {
+            membership.bindUser(userId);
         }
         memberships.flush();
         return membership;

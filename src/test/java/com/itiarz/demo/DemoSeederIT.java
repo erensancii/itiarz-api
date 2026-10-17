@@ -55,17 +55,16 @@ class DemoSeederIT extends IntegrationTest {
             assertThat(row(c, "SELECT name, keycloak_org_id, status FROM tenants WHERE slug = 'beta'"))
                     .containsExactly("Beta Market", betaOrg, "ACTIVE");
 
+            // linked user checked by e-mail: rows persist across tests while the fake issues new ids per test
             assertThat(members(c, "acme")).containsExactlyInAnyOrderEntriesOf(Map.of(
-                    "admin@acme.local", "TENANT_ADMIN/ACTIVE/" + kc("admin@acme.local") + "/admin@acme.local",
-                    "onay@acme.local", "APPROVER/ACTIVE/" + kc("onay@acme.local") + "/onay@acme.local",
-                    "analist@acme.local", "ANALYST/ACTIVE/" + kc("analist@acme.local") + "/analist@acme.local",
-                    "izleyici@acme.local", "VIEWER/ACTIVE/" + kc("izleyici@acme.local") + "/izleyici@acme.local",
-                    "danisman@itiarz.local",
-                    "ANALYST/ACTIVE/" + kc("danisman@itiarz.local") + "/danisman@itiarz.local"));
+                    "admin@acme.local", "TENANT_ADMIN/ACTIVE/admin@acme.local",
+                    "onay@acme.local", "APPROVER/ACTIVE/onay@acme.local",
+                    "analist@acme.local", "ANALYST/ACTIVE/analist@acme.local",
+                    "izleyici@acme.local", "VIEWER/ACTIVE/izleyici@acme.local",
+                    "danisman@itiarz.local", "ANALYST/ACTIVE/danisman@itiarz.local"));
             assertThat(members(c, "beta")).containsExactlyInAnyOrderEntriesOf(Map.of(
-                    "admin@beta.local", "TENANT_ADMIN/ACTIVE/" + kc("admin@beta.local") + "/admin@beta.local",
-                    "danisman@itiarz.local",
-                    "VIEWER/ACTIVE/" + kc("danisman@itiarz.local") + "/danisman@itiarz.local"));
+                    "admin@beta.local", "TENANT_ADMIN/ACTIVE/admin@beta.local",
+                    "danisman@itiarz.local", "VIEWER/ACTIVE/danisman@itiarz.local"));
             // the platform admin is a realm role only: no membership anywhere
             assertThat(count(c, "SELECT count(*) FROM memberships WHERE invited_email = 'platform@itiarz.local'"))
                     .isZero();
@@ -122,6 +121,48 @@ class DemoSeederIT extends IntegrationTest {
         assertThat(first.get("beta.cases")).isEqualTo(2);
     }
 
+    @Test
+    void reseedKeepsRoleChangesAndRemovalsMadeInTheApp() throws SQLException {
+        seeder.seed();
+        try {
+            try (Connection c = platformConnection()) {
+                update(c, "UPDATE memberships SET role = 'ANALYST' WHERE invited_email = 'izleyici@acme.local' "
+                        + "AND tenant_id = (SELECT id FROM tenants WHERE slug = 'acme')");
+                update(c, "UPDATE memberships SET status = 'REMOVED' WHERE invited_email = 'onay@acme.local' "
+                        + "AND tenant_id = (SELECT id FROM tenants WHERE slug = 'acme')");
+            }
+            fakeKeycloak.reset(); // fresh Keycloak state: the re-seed must not re-add the removed member
+            registerRealmUsers();
+
+            seeder.seed();
+
+            try (Connection c = platformConnection()) {
+                Map<String, String> acme = members(c, "acme");
+                assertThat(acme.get("izleyici@acme.local")).startsWith("ANALYST/ACTIVE/");
+                assertThat(acme.get("onay@acme.local")).startsWith("APPROVER/REMOVED/");
+                assertThat(acme.get("admin@acme.local")).startsWith("TENANT_ADMIN/ACTIVE/");
+            }
+            String acmeOrg = fakeKeycloak.findOrganizationIdByAlias("acme").orElseThrow();
+            assertThat(fakeKeycloak.membersOf(acmeOrg))
+                    .contains(kc("izleyici@acme.local"))
+                    .doesNotContain(kc("onay@acme.local"));
+        } finally {
+            // restore the seed state for the other tests (shared database)
+            try (Connection c = platformConnection()) {
+                update(c, "UPDATE memberships SET role = 'VIEWER' WHERE invited_email = 'izleyici@acme.local' "
+                        + "AND tenant_id = (SELECT id FROM tenants WHERE slug = 'acme')");
+                update(c, "UPDATE memberships SET status = 'ACTIVE' WHERE invited_email = 'onay@acme.local' "
+                        + "AND tenant_id = (SELECT id FROM tenants WHERE slug = 'acme')");
+            }
+        }
+    }
+
+    private static void update(Connection c, String sql) throws SQLException {
+        try (PreparedStatement ps = c.prepareStatement(sql)) {
+            assertThat(ps.executeUpdate()).isEqualTo(1);
+        }
+    }
+
     private Map<String, Long> snapshot() throws SQLException {
         Map<String, Long> counts = new LinkedHashMap<>();
         try (Connection c = platformConnection()) {
@@ -159,7 +200,7 @@ class DemoSeederIT extends IntegrationTest {
             ps.setString(1, slug);
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
-                    result.put(rs.getString(1), rs.getString(2) + "/" + rs.getString(3) + "/" + rs.getString(4)
+                    result.put(rs.getString(1), rs.getString(2) + "/" + rs.getString(3)
                             + "/" + rs.getString(5));
                 }
             }

@@ -3,6 +3,7 @@ package com.itiarz.demo;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -30,7 +31,9 @@ import com.itiarz.keycloak.KeycloakGateway;
 import com.itiarz.keycloak.KeycloakUnavailableException;
 import com.itiarz.membership.AppUser;
 import com.itiarz.membership.AppUserRepository;
+import com.itiarz.membership.Membership;
 import com.itiarz.membership.MembershipService;
+import com.itiarz.membership.MembershipStatus;
 import com.itiarz.security.RequestContextHolder;
 import com.itiarz.security.TenantRole;
 import com.itiarz.tenant.Tenant;
@@ -40,11 +43,13 @@ import com.itiarz.tenant.TenantRepository;
  * Development demo data (spec §11), run on {@link ApplicationReadyEvent} when {@code app.seed-demo=true}.
  *
  * <p>Per tenant: Keycloak organization by alias (created if missing) → realm users (imported with the
- * realm, looked up by e-mail) added as organization members → one platform-mode transaction for the
- * {@code tenants}, {@code app_users} and ACTIVE {@code memberships} rows → one tenant-mode transaction
- * ({@link RequestContextHolder#runAsTenant}) for the fictional cases, keyed by (tenant, provider,
- * provider_case_id). Every step is idempotent: a re-run creates nothing new and leaves existing cases
- * untouched. Seeded cases satisfy the workflow invariants (creation history row, required evidence for
+ * realm) looked up by e-mail → one platform-mode transaction for the {@code tenants} and
+ * {@code app_users} rows and the {@code memberships}, which are created ACTIVE <em>only when missing</em>
+ * (an existing row keeps its role and status, so changes made in the app, including removal, survive a
+ * re-seed) → the users of non-removed memberships added as organization members → one tenant-mode
+ * transaction ({@link RequestContextHolder#runAsTenant}) for the fictional cases, keyed by (tenant,
+ * provider, provider_case_id). Every step is idempotent: a re-run creates nothing new and leaves existing
+ * memberships and cases untouched. Seeded cases satisfy the workflow invariants (creation history row, required evidence for
  * Ready and later, four-eyes: prepared by the analyst, approved by the approver). No audit events are
  * written for seed data. {@code platform@itiarz.local} is a realm role only and gets no membership.
  *
@@ -176,11 +181,12 @@ public class DemoSeeder {
                 String keycloakUserId = keycloak.findUserIdByEmail(member.email()).orElseThrow(() ->
                         new IllegalStateException("Keycloak user " + member.email()
                                 + " not found; is the itiarz realm imported?"));
-                addMember(orgId, keycloakUserId);
                 keycloakIds.put(member.email(), keycloakUserId);
             }
             Seeded seeded = RequestContextHolder.runAsPlatform(() -> transactions.execute(status ->
                     seedTenantRows(seed, orgId, keycloakIds)));
+            // organization membership only for live rows: a member removed in the app stays removed
+            seeded.liveMembers().forEach(email -> addMember(orgId, keycloakIds.get(email)));
             int created = RequestContextHolder.runAsTenant(seeded.tenantId(), () -> transactions.execute(status ->
                     seedCases(seeded.tenantId(), seed.cases(), seeded.userIds())));
             log.info("Demo seed: tenant {} ready ({} members, {} new cases)", seed.slug(), seed.members().size(),
@@ -189,7 +195,8 @@ public class DemoSeeder {
         log.info("Demo seed completed");
     }
 
-    private record Seeded(UUID tenantId, Map<String, UUID> userIds) { }
+    /** {@code liveMembers}: seed e-mails whose membership is not REMOVED. */
+    private record Seeded(UUID tenantId, Map<String, UUID> userIds, List<String> liveMembers) { }
 
     private String ensureOrganization(TenantSeed seed) {
         return keycloak.findOrganizationIdByAlias(seed.slug()).orElseGet(() -> {
@@ -224,13 +231,18 @@ public class DemoSeeder {
         }
         tenants.flush();
         Map<String, UUID> userIds = new LinkedHashMap<>();
+        List<String> live = new ArrayList<>();
         for (MemberSeed member : seed.members()) {
             AppUser user = users.provision(keycloakIds.get(member.email()), member.email(),
                     DISPLAY_NAMES.get(member.email()));
-            membershipService.ensureActiveMember(tenant.getId(), user.getId(), member.email(), member.role());
+            Membership membership = membershipService.ensureMember(tenant.getId(), user.getId(), member.email(),
+                    member.role());
+            if (membership.getStatus() != MembershipStatus.REMOVED) {
+                live.add(member.email());
+            }
             userIds.put(member.email(), user.getId());
         }
-        return new Seeded(tenant.getId(), userIds);
+        return new Seeded(tenant.getId(), userIds, live);
     }
 
     /** Creates the missing cases with a history consistent with the workflow; returns how many were new. */
