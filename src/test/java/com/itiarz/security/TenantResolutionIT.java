@@ -116,7 +116,7 @@ class TenantResolutionIT extends IntegrationTest {
         String a = unique("acme");
         String b = unique("globex");
         seedTenant(a, "ACTIVE");
-        seedTenant(b, "ACTIVE");
+        seedTenant(b, "SUSPENDED");
         seedMember(a, email, "ANALYST", "ACTIVE");
         seedMember(b, email, "VIEWER", "ACTIVE");
 
@@ -131,6 +131,8 @@ class TenantResolutionIT extends IntegrationTest {
         List<String> slugs = new ArrayList<>();
         body.path("memberships").forEach(m -> slugs.add(m.path("slug").asText()));
         assertThat(slugs).containsExactlyInAnyOrder(a, b);
+        body.path("memberships").forEach(m -> assertThat(m.path("status").asText())
+                .isEqualTo(m.path("slug").asText().equals(a) ? "ACTIVE" : "SUSPENDED"));
         assertThat(body.path("permissions")).isEmpty();
     }
 

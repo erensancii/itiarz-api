@@ -21,6 +21,7 @@ import com.itiarz.security.RolePermissions;
 import com.itiarz.security.TenantRole;
 import com.itiarz.tenant.Tenant;
 import com.itiarz.tenant.TenantRepository;
+import com.itiarz.tenant.TenantStatus;
 
 /** Who am I: identity, own memberships across tenants and the active tenant's permissions. */
 @RestController
@@ -37,7 +38,8 @@ public class MeController {
 
     public record UserView(UUID id, String email, String displayName) { }
 
-    public record TenantView(String slug, String name, TenantRole role) { }
+    /** {@code status}: the tenant's status (a SUSPENDED tenant is listed but cannot be selected). */
+    public record TenantView(String slug, String name, TenantRole role, TenantStatus status) { }
 
     public record MeResponse(UserView user, boolean platformAdmin, List<TenantView> memberships,
                              TenantView activeTenant, List<String> permissions) { }
@@ -55,7 +57,7 @@ public class MeController {
                 .filter(m -> tenantById.containsKey(m.getTenantId()))
                 .map(m -> {
                     Tenant t = tenantById.get(m.getTenantId());
-                    return new TenantView(t.getSlug(), t.getName(), m.getRole());
+                    return new TenantView(t.getSlug(), t.getName(), m.getRole(), t.getStatus());
                 })
                 .sorted(Comparator.comparing(TenantView::name))
                 .toList();

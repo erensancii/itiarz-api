@@ -24,7 +24,9 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.ErrorResponse;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 import com.fasterxml.jackson.databind.JsonMappingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -92,6 +94,23 @@ public class ProblemDetailsHandler {
             problem.setProperty("errors", List.of(Map.of("field", fieldPath(mismatch.getPath()),
                     "message", mismatchMessage(mismatch.getTargetType()))));
         }
+        return respond(problem);
+    }
+
+    /**
+     * A path or query value of the wrong type. Path variables are record ids, so a malformed one is the
+     * same 404 as an unknown id; a query parameter is 400 VALIDATION naming the parameter.
+     */
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    ResponseEntity<ProblemDetail> typeMismatch(MethodArgumentTypeMismatchException ex, HttpServletRequest request) {
+        if (ex.getParameter().hasParameterAnnotation(PathVariable.class)) {
+            return respond(problem(HttpStatus.NOT_FOUND, ErrorCode.NOT_FOUND,
+                    "Kayıt bulunamadı. Listeye dönüp yeniden seçin.", request));
+        }
+        ProblemDetail problem = problem(HttpStatus.BAD_REQUEST, ErrorCode.VALIDATION,
+                "İstekteki bir parametre geçersiz. Sayfayı yenileyip tekrar deneyin.", request);
+        problem.setProperty("errors", List.of(Map.of("field", ex.getName(),
+                "message", mismatchMessage(ex.getRequiredType()))));
         return respond(problem);
     }
 
