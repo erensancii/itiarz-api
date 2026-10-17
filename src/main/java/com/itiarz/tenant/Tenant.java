@@ -36,6 +36,23 @@ public class Tenant {
     protected Tenant() {
     }
 
+    /** A new ACTIVE tenant mirroring the Keycloak organization {@code keycloakOrgId} (alias = slug). */
+    public static Tenant create(String keycloakOrgId, String slug, String name) {
+        Tenant t = new Tenant();
+        t.id = UUID.randomUUID();
+        t.keycloakOrgId = keycloakOrgId;
+        t.slug = slug;
+        t.name = name;
+        t.status = TenantStatus.ACTIVE;
+        t.createdAt = Instant.now();
+        return t;
+    }
+
+    /** Suspension keeps all data; the tenant's users are refused (403 TENANT_SUSPENDED) until reactivated. */
+    public void changeStatus(TenantStatus status) {
+        this.status = status;
+    }
+
     public UUID getId() { return id; }
     public String getKeycloakOrgId() { return keycloakOrgId; }
     public String getSlug() { return slug; }

@@ -132,6 +132,33 @@ public class MembershipService {
     }
 
     /**
+     * Like {@link #invite}, but a pending (INVITED) row for the e-mail is not a 409: its invitation is
+     * re-sent ("tekrar gönder"), with the role set to {@code role} and {@code member.invited} audited
+     * again. The Keycloak call is still the last step, so a failure rolls everything back. Used by the
+     * platform admin invitation endpoint (platform-mode transaction).
+     */
+    @Transactional
+    public Membership inviteOrResend(UUID tenantId, String email, TenantRole role, UUID invitedBy) {
+        String normalized = normalizeEmail(email);
+        Membership pending = memberships.lockByTenantIdAndInvitedEmail(tenantId, normalized)
+                .filter(m -> m.getStatus() == MembershipStatus.INVITED)
+                .orElse(null);
+        if (pending == null) {
+            return invite(tenantId, normalized, role, invitedBy);
+        }
+        if (pending.getRole() != role) {
+            pending.changeRole(role);
+            memberships.flush();
+        }
+        auditFor(tenantId, AuditActions.MEMBER_INVITED, pending.getId(),
+                details("email", normalized, "role", role.name(), "resent", "true"));
+        Tenant tenant = tenants.findById(tenantId)
+                .orElseThrow(() -> new IllegalStateException("Tenant not found: " + tenantId));
+        keycloak.inviteToOrganization(tenant.getKeycloakOrgId(), normalized);
+        return pending;
+    }
+
+    /**
      * Changes a member's role in the caller's tenant. Demoting the last active TENANT_ADMIN is 409
      * LAST_ADMIN; changing one's own role is 409 CONFLICT. Setting the current role is a no-op.
      */

@@ -25,6 +25,8 @@ public interface MembershipRepository extends JpaRepository<Membership, UUID> {
 
     List<Membership> findByTenantIdAndStatusNot(UUID tenantId, MembershipStatus status);
 
+    long countByTenantIdAndStatusNot(UUID tenantId, MembershipStatus status);
+
     /** True when a non-removed member of the tenant is linked to a user whose current e-mail is {@code email}. */
     @Query("""
             select count(m) > 0 from Membership m, AppUser u
@@ -35,6 +37,18 @@ public interface MembershipRepository extends JpaRepository<Membership, UUID> {
 
     /** The rows of a tenant linked to a user, any status (at most one by uq_memberships_tenant_user). */
     List<Membership> findByTenantIdAndUserId(UUID tenantId, UUID userId);
+
+    /** Non-removed (INVITED or ACTIVE) memberships per tenant; tenants without any are absent. */
+    @Query("""
+            select m.tenantId as tenantId, count(m) as members from Membership m
+            where m.status <> com.itiarz.membership.MembershipStatus.REMOVED group by m.tenantId
+            """)
+    List<TenantMemberCount> countLiveMembersByTenant();
+
+    interface TenantMemberCount {
+        UUID getTenantId();
+        long getMembers();
+    }
 
     /** {@link #findByTenantIdAndInvitedEmail} with SELECT ... FOR UPDATE (invitation activation). */
     @Lock(LockModeType.PESSIMISTIC_WRITE)

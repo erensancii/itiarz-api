@@ -33,6 +33,9 @@ public class FakeKeycloakGateway implements KeycloakGateway {
     private final List<Invitation> invitations = new ArrayList<>();
     private final Map<String, String> usersByEmail = new LinkedHashMap<>();
     private final AtomicReference<RuntimeException> nextFailure = new AtomicReference<>();
+    private final AtomicReference<RuntimeException> nextInvitationFailure = new AtomicReference<>();
+    private final List<String> deletedOrganizations = new ArrayList<>();
+    private String nextOrganizationId;
 
     public synchronized void reset() {
         orgs.clear();
@@ -40,6 +43,9 @@ public class FakeKeycloakGateway implements KeycloakGateway {
         invitations.clear();
         usersByEmail.clear();
         nextFailure.set(null);
+        nextInvitationFailure.set(null);
+        deletedOrganizations.clear();
+        nextOrganizationId = null;
     }
 
     /** Pre-registers a Keycloak user (as if it already had an account) and returns its id. */
@@ -59,6 +65,21 @@ public class FakeKeycloakGateway implements KeycloakGateway {
         return orgs.size();
     }
 
+    /** Ids passed to {@link #deleteOrganization}, in call order. */
+    public synchronized List<String> deletedOrganizations() {
+        return List.copyOf(deletedOrganizations);
+    }
+
+    /** The next {@link #inviteToOrganization} throws {@code failure} once (other calls are unaffected). */
+    public void failNextInvitation(RuntimeException failure) {
+        nextInvitationFailure.set(failure);
+    }
+
+    /** The next {@link #createOrganization} returns this id (once) instead of a random one. */
+    public synchronized void nextOrganizationId(String orgId) {
+        nextOrganizationId = orgId;
+    }
+
     /** The next gateway call (any method) throws {@code failure} once. */
     public void failNextCall(RuntimeException failure) {
         nextFailure.set(failure);
@@ -71,7 +92,9 @@ public class FakeKeycloakGateway implements KeycloakGateway {
         if (orgs.values().stream().anyMatch(o -> o.alias().equals(key))) {
             throw new DomainException(HttpStatus.CONFLICT, ErrorCode.CONFLICT, "Organization alias already exists");
         }
-        Org org = new Org(UUID.randomUUID().toString(), name, key);
+        String id = nextOrganizationId != null ? nextOrganizationId : UUID.randomUUID().toString();
+        nextOrganizationId = null;
+        Org org = new Org(id, name, key);
         orgs.put(org.id(), org);
         members.put(org.id(), new LinkedHashSet<>());
         return org.id();
@@ -80,6 +103,7 @@ public class FakeKeycloakGateway implements KeycloakGateway {
     @Override
     public synchronized void deleteOrganization(String orgId) {
         maybeFail();
+        deletedOrganizations.add(orgId);
         orgs.remove(orgId);
         members.remove(orgId);
     }
@@ -94,6 +118,10 @@ public class FakeKeycloakGateway implements KeycloakGateway {
     @Override
     public synchronized void inviteToOrganization(String orgId, String email) {
         maybeFail();
+        RuntimeException invitationFailure = nextInvitationFailure.getAndSet(null);
+        if (invitationFailure != null) {
+            throw invitationFailure;
+        }
         requireOrg(orgId);
         invitations.add(new Invitation(orgId, normalize(email)));
     }
