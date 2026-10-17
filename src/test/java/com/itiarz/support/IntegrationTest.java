@@ -18,7 +18,10 @@ import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RestController;
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -59,6 +62,21 @@ public abstract class IntegrationTest {
         }
     }
 
+    /**
+     * Test-only endpoint guarded by a permission, to exercise method-security denial. Registered by
+     * component scanning (test classes live under com.itiarz).
+     */
+    @RestController
+    public static class ProbeController {
+        public static final String MEMBER_MANAGE_PATH = "/api/test-probe/member-manage";
+
+        @GetMapping(MEMBER_MANAGE_PATH)
+        @PreAuthorize("hasAuthority('member:manage')")
+        public String memberManage() {
+            return "ok";
+        }
+    }
+
     /** Keycloak user id used for app_users created by {@link #seedMember}. */
     protected static String subOf(String email) {
         return "kc-" + email.toLowerCase(Locale.ROOT);
@@ -74,6 +92,13 @@ public abstract class IntegrationTest {
             headers.setBearerAuth(token);
         }
         return rest.exchange(path, HttpMethod.GET, new HttpEntity<>(headers), String.class);
+    }
+
+    protected ResponseEntity<String> postJson(String path, String token, String json) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.setBearerAuth(token);
+        headers.setContentType(org.springframework.http.MediaType.APPLICATION_JSON);
+        return rest.exchange(path, HttpMethod.POST, new HttpEntity<>(json, headers), String.class);
     }
 
     /** Inserts a tenant through the platform path (tenants allow writes only when app.platform='on'). */

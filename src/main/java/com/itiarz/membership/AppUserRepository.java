@@ -23,14 +23,17 @@ public interface AppUserRepository extends JpaRepository<AppUser, UUID> {
     int insertIfAbsent(@Param("id") UUID id, @Param("keycloakUserId") String keycloakUserId,
                        @Param("email") String email, @Param("displayName") String displayName);
 
-    /** Finds or creates the user for a token subject and syncs e-mail/name. Call inside a transaction. */
+    /**
+     * Finds or creates the user for a token subject and syncs e-mail/name (null = claim absent, keep
+     * stored value; a new user without an e-mail claim gets ''). Call inside a transaction.
+     */
     default AppUser provision(String keycloakUserId, String email, String displayName) {
         Optional<AppUser> existing = findByKeycloakUserId(keycloakUserId);
         if (existing.isPresent()) {
             existing.get().refresh(email, displayName, Instant.now());
             return existing.get();
         }
-        insertIfAbsent(UUID.randomUUID(), keycloakUserId, email, displayName);
+        insertIfAbsent(UUID.randomUUID(), keycloakUserId, email == null ? "" : email, displayName);
         return findByKeycloakUserId(keycloakUserId).orElseThrow();
     }
 }

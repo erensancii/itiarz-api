@@ -92,8 +92,7 @@ public class ProblemDetailsHandler {
             return respond(problem(resolved == null ? HttpStatus.BAD_REQUEST : resolved, code, null, request));
         }
         log.error("Unhandled exception [traceId={}]", TraceIdFilter.traceId(request), ex);
-        return respond(problem(HttpStatus.INTERNAL_SERVER_ERROR, null,
-                "Beklenmeyen bir hata oluştu. Destek koduyla birlikte bize ulaşabilirsiniz.", request));
+        return respond(internal(request));
     }
 
     public ProblemDetail problem(HttpStatus status, ErrorCode code, String detail, HttpServletRequest request) {
@@ -110,13 +109,19 @@ public class ProblemDetailsHandler {
     }
 
     public ProblemDetail unauthorized(HttpServletRequest request) {
-        return problem(HttpStatus.UNAUTHORIZED, null,
+        return problem(HttpStatus.UNAUTHORIZED, ErrorCode.UNAUTHENTICATED,
                 "Oturumunuz bulunamadı veya süresi doldu. Lütfen yeniden giriş yapın.", request);
     }
 
     public ProblemDetail forbidden(HttpServletRequest request) {
-        return problem(HttpStatus.FORBIDDEN, null,
+        return problem(HttpStatus.FORBIDDEN, ErrorCode.FORBIDDEN,
                 "Bu işlem için yetkiniz yok. Gerekirse şirket yöneticinizden yetki isteyin.", request);
+    }
+
+    /** Generic 500: never exposes exception messages; the cause is logged with the traceId by the caller. */
+    public ProblemDetail internal(HttpServletRequest request) {
+        return problem(HttpStatus.INTERNAL_SERVER_ERROR, ErrorCode.INTERNAL,
+                "Beklenmeyen bir hata oluştu. Destek koduyla birlikte bize ulaşabilirsiniz.", request);
     }
 
     /** Writes a problem directly to the servlet response (filters, entry points). */

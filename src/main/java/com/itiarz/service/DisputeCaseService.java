@@ -38,6 +38,7 @@ public class DisputeCaseService {
 
     @Transactional
     public CaseResponse create(CreateCaseRequest request) {
+        RequestContextHolder.requireTenantId();
         if (!request.deadlineUtc().isAfter(Instant.now())) {
             throw new DomainException(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION, "Son tarih gelecekte ve UTC olmalıdır.");
         }

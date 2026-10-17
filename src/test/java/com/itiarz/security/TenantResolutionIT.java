@@ -17,6 +17,7 @@ import org.springframework.http.ResponseEntity;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.itiarz.support.IntegrationTest;
+import com.itiarz.support.IntegrationTest.ProbeController;
 import com.itiarz.support.PostgresSupport;
 import com.itiarz.support.TestTokens;
 
@@ -35,6 +36,70 @@ class TenantResolutionIT extends IntegrationTest {
         JsonNode body = json(response);
         assertThat(body.path("status").asInt()).isEqualTo(401);
         assertThat(body.path("traceId").asText()).isNotBlank();
+        assertThat(body.path("code").asText()).isEqualTo("UNAUTHENTICATED");
+    }
+
+    @Test
+    void methodSecurityDenialReturns403ProblemJson() throws Exception {
+        String email = unique("viewer") + "@example.com";
+        String acme = unique("acme");
+        seedTenant(acme, "ACTIVE");
+        seedMember(acme, email, "VIEWER", "ACTIVE");
+
+        ResponseEntity<String> response = get(ProbeController.MEMBER_MANAGE_PATH,
+                TestTokens.jwt(subOf(email), email, List.of(acme), false));
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertProblemJson(response);
+        assertThat(json(response).path("code").asText()).isEqualTo("FORBIDDEN");
+    }
+
+    @Test
+    void platformAdminWithoutOrgGetsPlatformPermissionsOnly() throws Exception {
+        String email = unique("platform") + "@example.com";
+        String token = TestTokens.jwt(subOf(email), email, null, true);
+
+        ResponseEntity<String> me = get("/api/me", token);
+        assertThat(me.getStatusCode()).isEqualTo(HttpStatus.OK);
+        JsonNode body = json(me);
+        assertThat(body.path("platformAdmin").asBoolean()).isTrue();
+        assertThat(body.path("activeTenant").isNull()).isTrue();
+        assertThat(texts(body.path("permissions"))).containsExactlyInAnyOrder(
+                "tenant:create", "tenant:suspend", "tenant:invite-admin", "platform-audit:read");
+
+        ResponseEntity<String> cases = get("/api/cases", token);
+        assertThat(cases.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(json(cases).path("code").asText()).isEqualTo("TENANT_NOT_SELECTED");
+    }
+
+    @Test
+    void platformAdminNeverGetsTenantContextEvenWithMembership() throws Exception {
+        String email = unique("platform-member") + "@example.com";
+        String acme = unique("acme");
+        seedTenant(acme, "ACTIVE");
+        seedMember(acme, email, "TENANT_ADMIN", "ACTIVE");
+        String token = TestTokens.jwt(subOf(email), email, List.of(acme), true);
+
+        ResponseEntity<String> cases = get("/api/cases", token);
+        assertThat(cases.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(json(cases).path("code").asText()).isEqualTo("TENANT_NOT_SELECTED");
+
+        JsonNode me = json(get("/api/me", token));
+        assertThat(me.path("activeTenant").isNull()).isTrue();
+        assertThat(texts(me.path("permissions"))).doesNotContain("case:read", "member:manage");
+    }
+
+    @Test
+    void tenantlessCreateCaseReturns403() throws Exception {
+        String email = unique("creator") + "@example.com";
+
+        ResponseEntity<String> response = postJson("/api/cases", TestTokens.jwt(subOf(email), email, null, false), """
+                {"provider":"Banka","providerCaseId":"X-1","orderId":"O-1","reason":"Fraud",
+                 "amount":10.00,"currency":"TRY","deadlineUtc":"2099-01-01T00:00:00Z"}
+                """);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(json(response).path("code").asText()).isEqualTo("TENANT_NOT_SELECTED");
     }
 
     @Test
@@ -97,6 +162,7 @@ class TenantResolutionIT extends IntegrationTest {
         ResponseEntity<String> response = get("/api/me", TestTokens.jwt(subOf(email), email, List.of(slug), false));
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertProblemJson(response);
         assertThat(json(response).path("code").asText()).isEqualTo("TENANT_SUSPENDED");
     }
 
@@ -176,6 +242,18 @@ class TenantResolutionIT extends IntegrationTest {
 
         assertThat(get("/api/me", token).getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(countAppUsers(sub)).isEqualTo(1);
+    }
+
+    private static void assertProblemJson(ResponseEntity<String> response) {
+        assertThat(response.getHeaders().getContentType()).isNotNull();
+        assertThat(response.getHeaders().getContentType().isCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+                .isTrue();
+    }
+
+    private static List<String> texts(JsonNode array) {
+        List<String> result = new ArrayList<>();
+        array.forEach(node -> result.add(node.asText()));
+        return result;
     }
 
     private static UUID appUserId(String sub) throws Exception {

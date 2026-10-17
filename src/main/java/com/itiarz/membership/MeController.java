@@ -7,10 +7,13 @@ import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
+import org.springframework.http.HttpStatus;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.itiarz.common.DomainException;
+import com.itiarz.common.ErrorCode;
 import com.itiarz.security.Permission;
 import com.itiarz.security.RequestContext;
 import com.itiarz.security.RequestContextHolder;
@@ -59,7 +62,9 @@ public class MeController {
 
         TenantView active = context.hasTenant()
                 ? views.stream().filter(v -> v.slug().equals(context.tenantSlug())).findFirst()
-                        .orElseThrow(() -> new IllegalStateException("active tenant missing from own memberships"))
+                        // membership removed after tenant resolution (race): same answer as the filter
+                        .orElseThrow(() -> new DomainException(HttpStatus.FORBIDDEN, ErrorCode.NO_MEMBERSHIP,
+                                "Bu şirkette etkin bir üyeliğiniz yok. Başka bir şirket seçin veya yöneticinizden davet isteyin."))
                 : null;
         List<String> permissions = RolePermissions.granted(context.role(), context.platformAdmin()).stream()
                 .map(Permission::code).sorted().toList();

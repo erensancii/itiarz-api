@@ -43,10 +43,17 @@ public class AppUser {
     public Instant getCreatedAt() { return createdAt; }
     public Instant getLastLoginAt() { return lastLoginAt; }
 
-    /** Syncs identity fields from the token; last_login_at is refreshed at most hourly (no write per request). */
+    /**
+     * Syncs identity fields from the token; a missing (null) claim keeps the stored value.
+     * last_login_at is refreshed at most hourly (no write per request).
+     */
     void refresh(String email, String displayName, Instant now) {
-        this.email = email;
-        this.displayName = displayName;
+        if (email != null) {
+            this.email = email;
+        }
+        if (displayName != null) {
+            this.displayName = displayName;
+        }
         if (lastLoginAt == null || lastLoginAt.isBefore(now.minus(LOGIN_REFRESH))) {
             lastLoginAt = now;
         }
