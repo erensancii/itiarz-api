@@ -101,6 +101,13 @@ public abstract class IntegrationTest {
         return rest.exchange(path, HttpMethod.POST, new HttpEntity<>(json, headers), String.class);
     }
 
+    protected ResponseEntity<String> patchJson(String path, String token, String json) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.setBearerAuth(token);
+        headers.setContentType(org.springframework.http.MediaType.APPLICATION_JSON);
+        return rest.exchange(path, HttpMethod.PATCH, new HttpEntity<>(json, headers), String.class);
+    }
+
     /** Inserts a tenant through the platform path (tenants allow writes only when app.platform='on'). */
     protected UUID seedTenant(String slug, String status) {
         UUID id = UUID.randomUUID();

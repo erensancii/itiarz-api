@@ -45,6 +45,13 @@ public class ProblemDetailsHandler {
         return respond(problem(ex.status(), ex.code(), ex.getMessage(), request));
     }
 
+    @ExceptionHandler(FieldValidationException.class)
+    ResponseEntity<ProblemDetail> invalidField(FieldValidationException ex, HttpServletRequest request) {
+        ProblemDetail problem = problem(ex.status(), ex.code(), ex.getMessage(), request);
+        problem.setProperty("errors", List.of(Map.of("field", ex.field(), "message", ex.getMessage())));
+        return respond(problem);
+    }
+
     @ExceptionHandler(MethodArgumentNotValidException.class)
     ResponseEntity<ProblemDetail> invalid(MethodArgumentNotValidException ex, HttpServletRequest request) {
         ProblemDetail problem = problem(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION,
