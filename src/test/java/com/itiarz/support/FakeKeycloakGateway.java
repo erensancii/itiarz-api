@@ -19,8 +19,10 @@ import com.itiarz.keycloak.KeycloakGateway;
 import com.itiarz.keycloak.KeycloakRequestException;
 
 /**
- * In-memory Keycloak for integration tests. Organizations are unique by alias (409 CONFLICT otherwise),
- * e-mail lookups are case-insensitive, and {@link #failNextCall} makes the next gateway call throw once.
+ * In-memory Keycloak for integration tests, mirroring Keycloak 26.8.1 (HttpKeycloakGatewayIT): organizations
+ * are unique by alias and by name (409 CONFLICT otherwise); inviting an e-mail that has a pending invitation or
+ * belongs to an organization member is 409 CONFLICT (a pending invitation ends when the user joins); e-mail
+ * lookups are case-insensitive, and {@link #failNextCall} makes the next gateway call throw once.
  */
 public class FakeKeycloakGateway implements KeycloakGateway {
 
@@ -31,6 +33,7 @@ public class FakeKeycloakGateway implements KeycloakGateway {
     private final Map<String, Org> orgs = new LinkedHashMap<>();
     private final Map<String, Set<String>> members = new LinkedHashMap<>();
     private final List<Invitation> invitations = new ArrayList<>();
+    private final Set<Invitation> pendingInvitations = new LinkedHashSet<>();
     private final Map<String, String> usersByEmail = new LinkedHashMap<>();
     private final AtomicReference<RuntimeException> nextFailure = new AtomicReference<>();
     private final AtomicReference<RuntimeException> nextInvitationFailure = new AtomicReference<>();
@@ -41,6 +44,7 @@ public class FakeKeycloakGateway implements KeycloakGateway {
         orgs.clear();
         members.clear();
         invitations.clear();
+        pendingInvitations.clear();
         usersByEmail.clear();
         nextFailure.set(null);
         nextInvitationFailure.set(null);
@@ -92,6 +96,9 @@ public class FakeKeycloakGateway implements KeycloakGateway {
         if (orgs.values().stream().anyMatch(o -> o.alias().equals(key))) {
             throw new DomainException(HttpStatus.CONFLICT, ErrorCode.CONFLICT, "Organization alias already exists");
         }
+        if (orgs.values().stream().anyMatch(o -> o.name().equals(name))) {
+            throw new DomainException(HttpStatus.CONFLICT, ErrorCode.CONFLICT, "Organization name already exists");
+        }
         String id = nextOrganizationId != null ? nextOrganizationId : UUID.randomUUID().toString();
         nextOrganizationId = null;
         Org org = new Org(id, name, key);
@@ -106,6 +113,7 @@ public class FakeKeycloakGateway implements KeycloakGateway {
         deletedOrganizations.add(orgId);
         orgs.remove(orgId);
         members.remove(orgId);
+        pendingInvitations.removeIf(i -> i.orgId().equals(orgId));
     }
 
     @Override
@@ -123,7 +131,13 @@ public class FakeKeycloakGateway implements KeycloakGateway {
             throw invitationFailure;
         }
         requireOrg(orgId);
-        invitations.add(new Invitation(orgId, normalize(email)));
+        Invitation invitation = new Invitation(orgId, normalize(email));
+        String userId = usersByEmail.get(invitation.email());
+        if (pendingInvitations.contains(invitation) || (userId != null && members.get(orgId).contains(userId))) {
+            throw new DomainException(HttpStatus.CONFLICT, ErrorCode.CONFLICT, "Already invited or a member");
+        }
+        pendingInvitations.add(invitation);
+        invitations.add(invitation);
     }
 
     @Override
@@ -136,6 +150,11 @@ public class FakeKeycloakGateway implements KeycloakGateway {
         if (!members.get(orgId).add(keycloakUserId)) {
             throw new DomainException(HttpStatus.CONFLICT, ErrorCode.CONFLICT, "Already a member");
         }
+        usersByEmail.forEach((email, id) -> {
+            if (id.equals(keycloakUserId)) {
+                pendingInvitations.remove(new Invitation(orgId, email));
+            }
+        });
     }
 
     @Override

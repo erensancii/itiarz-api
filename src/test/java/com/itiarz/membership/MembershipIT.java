@@ -140,6 +140,57 @@ class MembershipIT extends IntegrationTest {
     }
 
     @Test
+    void reinviteAfterRemovingPendingInvitationSucceeds() {
+        String email = unique("analyst") + "@example.com";
+        assertThat(invite(adminToken, email, "ANALYST").getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        assertThat(delete("/api/members/" + membershipId(email), adminToken).getStatusCode())
+                .isEqualTo(HttpStatus.NO_CONTENT);
+
+        // Keycloak still holds the first (pending) invitation and answers 409: not a dead end
+        ResponseEntity<String> response = invite(adminToken, email, "VIEWER");
+
+        assertThat(response.getStatusCode()).as(response.getBody()).isEqualTo(HttpStatus.CREATED);
+        assertThat(json(response).path("status").asText()).isEqualTo("INVITED");
+        assertThat(json(response).path("role").asText()).isEqualTo("VIEWER");
+        assertThat(membershipStatus(email)).isEqualTo("INVITED");
+        assertThat(countAudit("member.invited")).isEqualTo(2);
+        assertThat(queryInTenant("SELECT details->>'alreadyInvited' FROM audit_events WHERE action = ? "
+                + "ORDER BY occurred_at DESC LIMIT 1", "member.invited")).isEqualTo("true");
+    }
+
+    @Test
+    void invitingAnExistingKeycloakOrgMemberSucceedsAndActivatesOnLogin() {
+        String email = unique("stale") + "@example.com";
+        String keycloakUserId = fakeKeycloak.registerUser(email);
+        fakeKeycloak.addOrganizationMember(orgId, keycloakUserId);
+
+        ResponseEntity<String> response = invite(adminToken, email, "ANALYST");
+
+        assertThat(response.getStatusCode()).as(response.getBody()).isEqualTo(HttpStatus.CREATED);
+        assertThat(fakeKeycloak.invitations()).doesNotContain(new Invitation(orgId, email));
+        JsonNode me = ok(get("/api/me", TestTokens.jwt(keycloakUserId, email, List.of(slug), false)));
+        assertThat(me.path("activeTenant").path("role").asText()).isEqualTo("ANALYST");
+        assertThat(membershipStatus(email)).isEqualTo("ACTIVE");
+    }
+
+    @Test
+    void removingPendingInvitationAlsoRemovesKeycloakOrgMembership() {
+        String email = unique("joined") + "@example.com";
+        assertThat(invite(adminToken, email, "ANALYST").getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        // accepted in Keycloak (org member) but never logged in to itiarz: the row is still INVITED
+        String keycloakUserId = fakeKeycloak.registerUser(email);
+        fakeKeycloak.addOrganizationMember(orgId, keycloakUserId);
+
+        ResponseEntity<String> response = delete("/api/members/" + membershipId(email), adminToken);
+
+        assertThat(response.getStatusCode()).as(response.getBody()).isEqualTo(HttpStatus.NO_CONTENT);
+        assertThat(membershipStatus(email)).isEqualTo("REMOVED");
+        assertThat(fakeKeycloak.membersOf(orgId)).doesNotContain(keycloakUserId);
+        // and a new invitation works again
+        assertThat(invite(adminToken, email, "VIEWER").getStatusCode()).isEqualTo(HttpStatus.CREATED);
+    }
+
+    @Test
     void unverifiedEmailDoesNotActivate() {
         String email = unique("analyst") + "@example.com";
         assertThat(invite(adminToken, email, "ANALYST").getStatusCode()).isEqualTo(HttpStatus.CREATED);

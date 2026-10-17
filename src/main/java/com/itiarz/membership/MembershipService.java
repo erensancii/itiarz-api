@@ -38,9 +38,9 @@ import com.itiarz.tenant.TenantRepository;
  *       For callers that own the transaction and talk to Keycloak themselves, e.g. platform tenant
  *       creation (Task 9) calls it inside its own (platform-mode) transaction and sends the Keycloak
  *       invitation after commit.</li>
- *   <li>{@link #invite}: {@code createInvitation} followed by
- *       {@link KeycloakGateway#inviteToOrganization} as the <em>last</em> step of the same transaction,
- *       so a Keycloak failure rolls the row and the audit event back (502, nothing persisted).</li>
+ *   <li>{@link #invite}: the row, then {@link KeycloakGateway#inviteToOrganization} and the audit event in
+ *       the same transaction, so a Keycloak failure rolls the row back (502, nothing persisted). A Keycloak
+ *       409 (pending Keycloak invitation or existing organization member) counts as success.</li>
  * </ul>
  * E-mails are normalized with {@code trim().toLowerCase(Locale.ROOT)} (locale independent). Removal is
  * likewise ordered with the Keycloak call last, so a Keycloak failure leaves the membership untouched.
@@ -88,6 +88,14 @@ public class MembershipService {
      */
     @Transactional
     public Membership createInvitation(UUID tenantId, String email, TenantRole role, UUID invitedBy) {
+        Membership membership = saveInvitation(tenantId, email, role, invitedBy);
+        auditFor(tenantId, AuditActions.MEMBER_INVITED, membership.getId(),
+                details("email", membership.getInvitedEmail(), "role", role.name()));
+        return membership;
+    }
+
+    /** The INVITED row of {@link #createInvitation} without the audit event. */
+    private Membership saveInvitation(UUID tenantId, String email, TenantRole role, UUID invitedBy) {
         String normalized = normalizeEmail(email);
         if (role == null) {
             throw new FieldValidationException("role", "Rol seçilmelidir.");
@@ -113,29 +121,32 @@ public class MembershipService {
             }
             throw e;
         }
-        auditFor(tenantId, AuditActions.MEMBER_INVITED, membership.getId(),
-                details("email", normalized, "role", role.name()));
         return membership;
     }
 
     /**
-     * {@link #createInvitation} plus the Keycloak invitation e-mail as the last step of the same
-     * transaction; a Keycloak failure (502 / 500) rolls everything back.
+     * {@link #createInvitation} plus the Keycloak invitation e-mail in the same transaction; a Keycloak
+     * failure (502 / 500) rolls everything back. A Keycloak 409 means the e-mail already has a pending
+     * Keycloak invitation or belongs to an organization member (e.g. an earlier invitation that was
+     * removed here): that is a success, the INVITED row is kept and activates on the next login, and
+     * the audit event carries {@code alreadyInvited=true}. The audit insert follows the Keycloak call
+     * (it needs its outcome); should it fail, the row rolls back and a repeated invitation is again a 409
+     * success, so nothing is stuck.
      */
     @Transactional
     public Membership invite(UUID tenantId, String email, TenantRole role, UUID invitedBy) {
-        Membership membership = createInvitation(tenantId, email, role, invitedBy);
-        Tenant tenant = tenants.findById(tenantId)
-                .orElseThrow(() -> new IllegalStateException("Tenant not found: " + tenantId));
-        keycloak.inviteToOrganization(tenant.getKeycloakOrgId(), membership.getInvitedEmail());
+        Membership membership = saveInvitation(tenantId, email, role, invitedBy);
+        boolean alreadyInvited = sendKeycloakInvitation(tenantId, membership.getInvitedEmail());
+        auditInvited(tenantId, membership, role, false, alreadyInvited);
         return membership;
     }
 
     /**
      * Like {@link #invite}, but a pending (INVITED) row for the e-mail is not a 409: its invitation is
      * re-sent ("tekrar gönder"), with the role set to {@code role} and {@code member.invited} audited
-     * again. The Keycloak call is still the last step, so a failure rolls everything back. Used by the
-     * platform admin invitation endpoint (platform-mode transaction).
+     * again. A Keycloak failure rolls everything back; a Keycloak 409 (invitation still pending there) is
+     * a success as in {@link #invite}. Used by the platform admin invitation endpoint (platform-mode
+     * transaction).
      */
     @Transactional
     public Membership inviteOrResend(UUID tenantId, String email, TenantRole role, UUID invitedBy) {
@@ -150,12 +161,36 @@ public class MembershipService {
             pending.changeRole(role);
             memberships.flush();
         }
-        auditFor(tenantId, AuditActions.MEMBER_INVITED, pending.getId(),
-                details("email", normalized, "role", role.name(), "resent", "true"));
+        boolean alreadyInvited = sendKeycloakInvitation(tenantId, normalized);
+        auditInvited(tenantId, pending, role, true, alreadyInvited);
+        return pending;
+    }
+
+    /** Sends the Keycloak invitation; true when Keycloak answered 409 (already invited or a member). */
+    private boolean sendKeycloakInvitation(UUID tenantId, String email) {
         Tenant tenant = tenants.findById(tenantId)
                 .orElseThrow(() -> new IllegalStateException("Tenant not found: " + tenantId));
-        keycloak.inviteToOrganization(tenant.getKeycloakOrgId(), normalized);
-        return pending;
+        try {
+            keycloak.inviteToOrganization(tenant.getKeycloakOrgId(), email);
+            return false;
+        } catch (DomainException e) {
+            if (e.status() == HttpStatus.CONFLICT) {
+                return true;
+            }
+            throw e;
+        }
+    }
+
+    private void auditInvited(UUID tenantId, Membership membership, TenantRole role, boolean resent,
+                              boolean alreadyInvited) {
+        Map<String, Object> details = details("email", membership.getInvitedEmail(), "role", role.name());
+        if (resent) {
+            details.put("resent", "true");
+        }
+        if (alreadyInvited) {
+            details.put("alreadyInvited", "true");
+        }
+        auditFor(tenantId, AuditActions.MEMBER_INVITED, membership.getId(), details);
     }
 
     /**
@@ -208,8 +243,10 @@ public class MembershipService {
 
     /**
      * Removes a member (status REMOVED, row kept). Removing the last active TENANT_ADMIN is 409
-     * LAST_ADMIN. A linked user is also removed from the Keycloak organization, as the last step so a
-     * Keycloak failure rolls the removal back.
+     * LAST_ADMIN. The Keycloak user is also removed from the organization (not being a member is fine),
+     * as the last step so a Keycloak failure rolls the removal back: a linked row uses its user; a
+     * pending invitation (no user yet) looks the user up by the invited e-mail, since the invitee may
+     * already have joined the organization in Keycloak without having logged in to itiarz.
      */
     @Transactional
     public void remove(UUID membershipId) {
@@ -223,14 +260,26 @@ public class MembershipService {
         memberships.flush();
         audit.record(AuditActions.MEMBER_REMOVED, "membership", membership.getId().toString(),
                 details("email", membership.getInvitedEmail(), "role", membership.getRole().name()));
-        if (membership.getUserId() != null) {
-            String keycloakUserId = users.findById(membership.getUserId())
-                    .map(AppUser::getKeycloakUserId).orElse(null);
-            if (keycloakUserId != null && !keycloakUserId.isBlank()) {
-                Tenant tenant = tenants.findById(context.tenantId()).orElseThrow();
-                keycloak.removeOrganizationMember(tenant.getKeycloakOrgId(), keycloakUserId);
-            }
+        String keycloakUserId = membership.getUserId() != null
+                ? users.findById(membership.getUserId()).map(AppUser::getKeycloakUserId).orElse(null)
+                : keycloak.findUserIdByEmail(membership.getInvitedEmail())
+                        .filter(id -> !holdsAnotherLiveMembership(context.tenantId(), id))
+                        .orElse(null);
+        if (keycloakUserId != null && !keycloakUserId.isBlank()) {
+            Tenant tenant = tenants.findById(context.tenantId()).orElseThrow();
+            keycloak.removeOrganizationMember(tenant.getKeycloakOrgId(), keycloakUserId);
         }
+    }
+
+    /**
+     * True when the Keycloak user is already linked to a non-removed membership of the tenant (e.g. under
+     * an older e-mail): removing a pending invitation for their new address must not cut that access.
+     */
+    private boolean holdsAnotherLiveMembership(UUID tenantId, String keycloakUserId) {
+        return users.findByKeycloakUserId(keycloakUserId)
+                .map(user -> memberships.findByTenantIdAndUserId(tenantId, user.getId()).stream()
+                        .anyMatch(m -> m.getStatus() != MembershipStatus.REMOVED))
+                .orElse(false);
     }
 
     /** Response view; loads the linked user (if any) for its current e-mail and display name. */

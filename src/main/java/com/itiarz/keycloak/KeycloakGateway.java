@@ -4,14 +4,17 @@ import java.util.Optional;
 
 /** Keycloak Admin API operations itiarz needs (organizations, invitations, user lookup). */
 public interface KeycloakGateway {
-    /** Creates an organization and returns its id; an alias that already exists is a 409 DomainException. */
+    /** Creates an organization and returns its id; an alias or a name that already exists is a 409 DomainException. */
     String createOrganization(String name, String alias);
 
     void deleteOrganization(String orgId);
 
     Optional<String> findOrganizationIdByAlias(String alias);
 
-    /** Keycloak sends the invitation e-mail. */
+    /**
+     * Keycloak sends the invitation e-mail. A pending invitation for the e-mail or an existing organization
+     * member with it is a 409 DomainException.
+     */
     void inviteToOrganization(String orgId, String email);
 
     void addOrganizationMember(String orgId, String keycloakUserId);

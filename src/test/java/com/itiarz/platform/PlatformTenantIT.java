@@ -104,6 +104,25 @@ class PlatformTenantIT extends IntegrationTest {
         assertProblem(create("Acme", other, "admin@example.com"), HttpStatus.CONFLICT, "CONFLICT");
         assertThat(query(null, "SELECT count(*)::text FROM tenants WHERE slug = ?", other)).isEqualTo("0");
         assertThat(fakeKeycloak.invitations()).isEmpty();
+        assertThat(json(create("Acme", other, "admin@example.com")).path("errors").get(0).path("field").asText())
+                .isEqualTo("slug");
+    }
+
+    @Test
+    void duplicateKeycloakOrganizationNameIs409OnNameField() {
+        String name = "Ayni Ad " + unique("x");
+        assertThat(create(name, unique("acme"), "admin@example.com").getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        int organizations = fakeKeycloak.organizationCount();
+
+        String slug = unique("acme");
+        ResponseEntity<String> response = create(name, slug, "admin@example.com");
+
+        assertProblem(response, HttpStatus.CONFLICT, "CONFLICT");
+        JsonNode error = json(response).path("errors").get(0);
+        assertThat(error.path("field").asText()).isEqualTo("name");
+        assertThat(error.path("message").asText()).isEqualTo("Bu şirket adı kullanımda. Farklı bir ad girin.");
+        assertThat(fakeKeycloak.organizationCount()).isEqualTo(organizations);
+        assertThat(query(null, "SELECT count(*)::text FROM tenants WHERE slug = ?", slug)).isEqualTo("0");
     }
 
     @Test
@@ -221,6 +240,13 @@ class PlatformTenantIT extends IntegrationTest {
         assertThat(body.path("status").asText()).isEqualTo("INVITED");
         assertThat(fakeKeycloak.invitations()).containsExactly(new Invitation(orgId, "yeni.admin@example.com"));
 
+        // re-sending while Keycloak still holds the invitation (Keycloak answers 409) is a success
+        ResponseEntity<String> again = postJson(path, platformToken, "{\"email\":\"yeni.admin@example.com\"}");
+        assertThat(again.getStatusCode()).as(again.getBody()).isEqualTo(HttpStatus.CREATED);
+        assertThat(json(again).path("id").asText()).isEqualTo(body.path("id").asText());
+        assertThat(query(tenantId, "SELECT count(*)::text FROM audit_events WHERE action = 'member.invited' "
+                + "AND details->>'alreadyInvited' = ?", "true")).isEqualTo("1");
+
         // a pending invitation (even with another role) is re-sent as TENANT_ADMIN, not a 409
         String pending = unique("pending") + "@example.com";
         UUID pendingId = seedMember(slug, pending, "ANALYST", "INVITED");
@@ -230,7 +256,7 @@ class PlatformTenantIT extends IntegrationTest {
         assertThat(json(resent).path("role").asText()).isEqualTo("TENANT_ADMIN");
         assertThat(fakeKeycloak.invitations()).contains(new Invitation(orgId, pending));
         assertThat(query(tenantId, "SELECT count(*)::text FROM audit_events WHERE action = ?", "member.invited"))
-                .isEqualTo("2");
+                .isEqualTo("3");
 
         // Keycloak down for a new invitation: 502, nothing left behind
         String failing = unique("down") + "@example.com";

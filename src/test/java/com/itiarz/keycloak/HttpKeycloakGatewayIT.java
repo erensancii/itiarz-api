@@ -153,6 +153,41 @@ class HttpKeycloakGatewayIT {
     }
 
     @Test
+    void duplicateNameWithDifferentAliasIsConflict() {
+        String name = "Ayni Ad " + alias();
+        String id = gateway.createOrganization(name, alias());
+
+        assertThatThrownBy(() -> gateway.createOrganization(name, alias()))
+                .isInstanceOfSatisfying(DomainException.class,
+                        ex -> assertThat(ex.status()).isEqualTo(HttpStatus.CONFLICT));
+        gateway.deleteOrganization(id);
+    }
+
+    @Test
+    void invitingAnExistingMemberIsConflict() {
+        String id = gateway.createOrganization("Invite member " + alias(), alias());
+        String userId = gateway.findUserIdByEmail("analist@acme.local").orElseThrow();
+        gateway.addOrganizationMember(id, userId);
+
+        assertThatThrownBy(() -> gateway.inviteToOrganization(id, "analist@acme.local"))
+                .isInstanceOfSatisfying(DomainException.class,
+                        ex -> assertThat(ex.status()).isEqualTo(HttpStatus.CONFLICT));
+        gateway.deleteOrganization(id);
+    }
+
+    @Test
+    void reinvitingAPendingInvitationIsConflict() {
+        String id = gateway.createOrganization("Reinvite " + alias(), alias());
+        String email = "tekrar-" + UUID.randomUUID().toString().substring(0, 8) + "@example.com";
+        gateway.inviteToOrganization(id, email);
+
+        assertThatThrownBy(() -> gateway.inviteToOrganization(id, email))
+                .isInstanceOfSatisfying(DomainException.class,
+                        ex -> assertThat(ex.status()).isEqualTo(HttpStatus.CONFLICT));
+        gateway.deleteOrganization(id);
+    }
+
+    @Test
     void findUserIdByEmailIsCaseInsensitive() {
         String lower = gateway.findUserIdByEmail("analist@acme.local").orElseThrow();
         assertThat(gateway.findUserIdByEmail("Analist@ACME.local")).contains(lower);

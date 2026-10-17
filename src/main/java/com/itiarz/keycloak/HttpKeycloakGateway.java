@@ -34,6 +34,10 @@ import com.itiarz.common.ErrorCode;
  *       the list and filters on alias.</li>
  *   <li>Adding an existing member answers 409; invite-user answers success and sends the e-mail through the realm SMTP
  *       (mailpit in the IT).</li>
+ *   <li>invite-user answers 409 when the e-mail already has a pending invitation to the organization or belongs to
+ *       an organization member (callers treat that as "already invited").</li>
+ *   <li>Organization names are unique as well: a second organization with the same name and another alias is 409,
+ *       indistinguishable from an alias clash without a lookup.</li>
  * </ul>
  */
 public class HttpKeycloakGateway implements KeycloakGateway {

@@ -20,6 +20,7 @@ import com.itiarz.audit.AuditActions;
 import com.itiarz.audit.AuditService;
 import com.itiarz.common.DomainException;
 import com.itiarz.common.ErrorCode;
+import com.itiarz.common.FieldValidationException;
 import com.itiarz.keycloak.KeycloakGateway;
 import com.itiarz.membership.MemberDtos.MemberView;
 import com.itiarz.membership.Membership;
@@ -99,7 +100,8 @@ public class PlatformTenantService {
             orgId = keycloak.createOrganization(name, slug);
         } catch (DomainException e) {
             if (e.status() == HttpStatus.CONFLICT) {
-                throw duplicateSlug();
+                // Keycloak answers 409 for a taken alias and for a taken organization name alike
+                throw keycloak.findOrganizationIdByAlias(slug).isPresent() ? duplicateSlug() : duplicateName();
             }
             throw e;
         }
@@ -202,8 +204,14 @@ public class PlatformTenantService {
     }
 
     private static DomainException duplicateSlug() {
-        return new DomainException(HttpStatus.CONFLICT, ErrorCode.CONFLICT,
+        return new FieldValidationException(HttpStatus.CONFLICT, ErrorCode.CONFLICT, "slug",
                 "Bu kısa ad (slug) başka bir şirket tarafından kullanılıyor. Farklı bir kısa ad seçin.");
+    }
+
+    /** Keycloak organization names are unique too (verified against 26.8.1). */
+    private static DomainException duplicateName() {
+        return new FieldValidationException(HttpStatus.CONFLICT, ErrorCode.CONFLICT, "name",
+                "Bu şirket adı kullanımda. Farklı bir ad girin.");
     }
 
     private static DomainException tenantNotFound() {
