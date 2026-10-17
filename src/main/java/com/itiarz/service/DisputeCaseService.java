@@ -2,7 +2,10 @@ package com.itiarz.service;
 
 import com.itiarz.api.CaseDtos.*;
 import com.itiarz.domain.*;
+import com.itiarz.common.DomainException;
+import com.itiarz.common.ErrorCode;
 import com.itiarz.repo.DisputeCaseRepository;
+import com.itiarz.security.RequestContextHolder;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -23,6 +26,8 @@ public class DisputeCaseService {
 
     @Transactional(readOnly = true)
     public List<CaseResponse> findAll() {
+        // Interim guard until Task 6 rewrites this service; RLS scopes the rows to the tenant.
+        RequestContextHolder.requireTenantId();
         return repository.findAllWithEvidenceOrdered().stream().map(this::toResponse).toList();
     }
 
@@ -34,13 +39,13 @@ public class DisputeCaseService {
     @Transactional
     public CaseResponse create(CreateCaseRequest request) {
         if (!request.deadlineUtc().isAfter(Instant.now())) {
-            throw new DomainException(HttpStatus.BAD_REQUEST, "Son tarih gelecekte ve UTC olmalıdır.");
+            throw new DomainException(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION, "Son tarih gelecekte ve UTC olmalıdır.");
         }
         var provider = request.provider().trim();
         var providerCaseId = request.providerCaseId().trim();
         var orderId = request.orderId().trim();
         if (repository.existsByProviderAndProviderCaseId(provider, providerCaseId)) {
-            throw new DomainException(HttpStatus.CONFLICT, "Bu sağlayıcı/itiraz numarası zaten kayıtlı.");
+            throw new DomainException(HttpStatus.CONFLICT, ErrorCode.DUPLICATE_CASE, "Bu sağlayıcı/itiraz numarası zaten kayıtlı.");
         }
         var dispute = new DisputeCase(provider, providerCaseId, orderId, request.reason(),
             request.amount(), request.currency(), request.deadlineUtc());
@@ -51,11 +56,11 @@ public class DisputeCaseService {
     public CaseResponse addEvidence(UUID caseId, AddEvidenceRequest request) {
         var dispute = getCase(caseId);
         if (!CaseRules.ALLOWED_EVIDENCE.contains(request.kind())) {
-            throw new DomainException(HttpStatus.BAD_REQUEST, "Geçersiz kanıt türü.");
+            throw new DomainException(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.VALIDATION, "Geçersiz kanıt türü.");
         }
         if (dispute.getStatus() == CaseStatus.Submitted || dispute.getStatus() == CaseStatus.Won
                 || dispute.getStatus() == CaseStatus.Lost) {
-            throw new DomainException(HttpStatus.CONFLICT, "Gönderilmiş/kapanmış itiraz değiştirilemez.");
+            throw new DomainException(HttpStatus.CONFLICT, ErrorCode.INVALID_TRANSITION, "Gönderilmiş/kapanmış itiraz değiştirilemez.");
         }
         dispute.addEvidence(request.kind(), request.note() == null ? "" : request.note().trim());
         // Adding new evidence to a Ready case requires a human to re-confirm readiness.
@@ -67,10 +72,10 @@ public class DisputeCaseService {
     public CaseResponse changeStatus(UUID caseId, ChangeStatusRequest request) {
         var dispute = getCase(caseId);
         if (!CaseRules.validTransition(dispute.getStatus(), request.status())) {
-            throw new DomainException(HttpStatus.CONFLICT, "Bu durum geçişi geçersiz.");
+            throw new DomainException(HttpStatus.CONFLICT, ErrorCode.INVALID_TRANSITION, "Bu durum geçişi geçersiz.");
         }
         if (request.status() == CaseStatus.Ready && !missingEvidence(dispute).isEmpty()) {
-            throw new DomainException(HttpStatus.CONFLICT, "Zorunlu kanıt türleri henüz tamamlanmadı.");
+            throw new DomainException(HttpStatus.CONFLICT, ErrorCode.EVIDENCE_INCOMPLETE, "Zorunlu kanıt türleri henüz tamamlanmadı.");
         }
         // Submitted ONLY records a human's external action; no bank/PSP call occurs.
         dispute.setStatus(request.status());
@@ -78,8 +83,9 @@ public class DisputeCaseService {
     }
 
     private DisputeCase getCase(UUID id) {
+        RequestContextHolder.requireTenantId();
         return repository.findWithEvidenceById(id).orElseThrow(() ->
-            new DomainException(HttpStatus.NOT_FOUND, "İtiraz kaydı bulunamadı."));
+            new DomainException(HttpStatus.NOT_FOUND, ErrorCode.NOT_FOUND, "İtiraz kaydı bulunamadı."));
     }
 
     private List<String> missingEvidence(DisputeCase dispute) {

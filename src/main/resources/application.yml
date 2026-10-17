@@ -33,3 +33,10 @@ management:
 
 app:
   seed-demo: ${SEED_DEMO:true}
+  security:
+    keycloak:
+      # issuer as seen by browsers/tokens (iss = public-url/realms/<realm>)
+      public-url: ${KC_PUBLIC_URL:http://localhost:8081}
+      # JWKS fetched over the internal network
+      internal-url: ${KC_INTERNAL_URL:http://localhost:8081}
+      realm: ${KC_REALM:itiarz}

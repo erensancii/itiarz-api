@@ -1,0 +1,49 @@
+package com.itiarz.tenant;
+
+import java.time.Instant;
+import java.util.UUID;
+
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
+import jakarta.persistence.Id;
+import jakarta.persistence.Table;
+
+/** A customer company; mirrors a Keycloak Organization whose alias equals {@code slug}. */
+@Entity
+@Table(name = "tenants")
+public class Tenant {
+    @Id
+    private UUID id;
+
+    @Column(name = "keycloak_org_id", nullable = false, unique = true, length = 80)
+    private String keycloakOrgId;
+
+    @Column(nullable = false, unique = true, length = 63)
+    private String slug;
+
+    @Column(nullable = false, length = 200)
+    private String name;
+
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 20)
+    private TenantStatus status;
+
+    @Column(name = "created_at", nullable = false)
+    private Instant createdAt;
+
+    protected Tenant() {
+    }
+
+    public UUID getId() { return id; }
+    public String getKeycloakOrgId() { return keycloakOrgId; }
+    public String getSlug() { return slug; }
+    public String getName() { return name; }
+    public TenantStatus getStatus() { return status; }
+    public Instant getCreatedAt() { return createdAt; }
+
+    public boolean isActive() {
+        return status == TenantStatus.ACTIVE;
+    }
+}
