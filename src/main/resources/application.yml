@@ -6,8 +6,9 @@ spring:
     name: itiarz-api
   datasource:
     url: ${DB_URL:jdbc:postgresql://localhost:5433/itiarz}
-    username: ${DB_USER:itiarz}
-    password: ${DB_PASSWORD:localdev_only_change_me}
+    # application role: NOSUPERUSER NOBYPASSRLS, owns no tables (infra/postgres/init/01-init.sh)
+    username: ${DB_APP_USER:itiarz_app}
+    password: ${DB_APP_PASSWORD:app_dev_only_change_me}
   jpa:
     open-in-view: false
     hibernate:
@@ -18,6 +19,11 @@ spring:
           time_zone: UTC
   flyway:
     enabled: true
+    # migrations run as the schema owner; grants in V3 target the app role
+    user: ${DB_OWNER_USER:itiarz_owner}
+    password: ${DB_OWNER_PASSWORD:owner_dev_only_change_me}
+    placeholders:
+      appRole: ${DB_APP_USER:itiarz_app}
 
 management:
   endpoints:
