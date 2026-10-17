@@ -10,6 +10,8 @@ class AuditServiceIpTest {
     void keepsValidLiterals() {
         assertThat(AuditService.normalizeIp("203.0.113.7")).isEqualTo("203.0.113.7");
         assertThat(AuditService.normalizeIp("127.0.0.1")).isEqualTo("127.0.0.1");
+        assertThat(AuditService.normalizeIp("0.0.0.0")).isEqualTo("0.0.0.0");
+        assertThat(AuditService.normalizeIp("10.0.0.1")).isEqualTo("10.0.0.1");
         assertThat(AuditService.normalizeIp("::1")).isEqualTo("::1");
         assertThat(AuditService.normalizeIp("2001:db8::1")).isEqualTo("2001:db8::1");
         assertThat(AuditService.normalizeIp("::ffff:1.2.3.4")).isEqualTo("::ffff:1.2.3.4");
@@ -29,6 +31,9 @@ class AuditServiceIpTest {
         assertThat(AuditService.normalizeIp("example.com")).isNull();
         assertThat(AuditService.normalizeIp("999.1.1.1")).isNull();
         assertThat(AuditService.normalizeIp("%eth0")).isNull();
+        assertThat(AuditService.normalizeIp("01.2.3.4")).isNull();
+        assertThat(AuditService.normalizeIp("10.0.0.01")).isNull();
+        assertThat(AuditService.normalizeIp("::ffff:01.2.3.4")).isNull();
         assertThat(AuditService.normalizeIp("::::")).isNull();
         assertThat(AuditService.normalizeIp("a:b")).isNull();
         assertThat(AuditService.normalizeIp("1.2.3")).isNull();

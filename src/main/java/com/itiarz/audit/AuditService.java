@@ -88,7 +88,8 @@ public class AuditService {
             return false;
         }
         for (String part : parts) {
-            if (!part.matches("[0-9]{1,3}") || Integer.parseInt(part) > 255) {
+            if (!part.matches("[0-9]{1,3}") || (part.length() > 1 && part.charAt(0) == '0')
+                    || Integer.parseInt(part) > 255) {
                 return false;
             }
         }
@@ -106,14 +107,16 @@ public class AuditService {
         String head = dbl >= 0 ? s.substring(0, dbl) : s;
         String tail = dbl >= 0 ? s.substring(dbl + 2) : "";
         int groups = 0;
-        for (String side : dbl >= 0 ? new String[] {head, tail} : new String[] {head}) {
+        String[] sides = dbl >= 0 ? new String[] {head, tail} : new String[] {head};
+        for (int sideIdx = 0; sideIdx < sides.length; sideIdx++) {
+            String side = sides[sideIdx];
             if (side.isEmpty()) {
                 continue;
             }
             String[] parts = side.split(":", -1);
             for (int i = 0; i < parts.length; i++) {
                 String part = parts[i];
-                boolean last = side == (dbl >= 0 ? tail : head) && i == parts.length - 1;
+                boolean last = sideIdx == sides.length - 1 && i == parts.length - 1;
                 if (last && part.indexOf('.') >= 0) {
                     if (!isIpv4(part)) {
                         return false;
