@@ -137,7 +137,7 @@ public class HttpKeycloakGateway implements KeycloakGateway {
             HttpStatus status = HttpStatus.resolve(ex.getStatusCode().value());
             if (status == HttpStatus.CONFLICT) {
                 throw new DomainException(HttpStatus.CONFLICT, ErrorCode.CONFLICT,
-                        "Bu kayıt Keycloak tarafında zaten mevcut. Bilgileri kontrol edip tekrar deneyin.");
+                        "Bu kayıt zaten mevcut. Bilgileri kontrol edip tekrar deneyin.");
             }
             if (status == HttpStatus.NOT_FOUND && tolerateNotFound) {
                 return null;
